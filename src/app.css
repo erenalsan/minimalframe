@@ -1,0 +1,32 @@
+/*
+ * app.css — MinimalFrame
+ * Global reset + base. All design tokens and component styles live in App.svelte.
+ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  font-size: 15px;
+  scroll-behavior: smooth;
+  color-scheme: dark;
+}
+
+body {
+  background: #0e0e11;
+  color: #dddde8;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+}
+
+/* Remove default button / input chrome */
+button { cursor: pointer; background: none; border: none; font: inherit; }
+input  { font: inherit; }
+
+/* Default focus ring */
+:focus-visible {
+  outline: 2px solid #7c6ff5;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
