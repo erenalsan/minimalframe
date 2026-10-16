@@ -2028,7 +2028,7 @@
   ondragleave={onDragLeave}
 >
   <header class="bar glass">
-    <span class="wordmark">MinimalFrame</span>
+    <span class="wordmark"><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text">MinimalFrame</span></span>
     {#if activeItem}
       <p class="meta">
         <span class="meta-name">{activeItem.name}</span>
@@ -2904,11 +2904,20 @@
     border-radius: 999px;
   }
   .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
     font-stretch: 112%;
     font-weight: 750;
     font-size: 1.05rem;
     letter-spacing: -0.02em;
     white-space: nowrap;
+  }
+  .mark {
+    width: 24px;
+    height: 24px;
+    display: block;
   }
   .meta {
     display: flex;
@@ -4220,7 +4229,8 @@
     .meta {
       display: none;
     }
-    .bar-tools {
+    /* Same specificity as ".meta + .bar-tools", which would otherwise keep Export off the right edge. */
+    .meta + .bar-tools {
       margin-left: auto;
     }
     .wordmark {
@@ -4279,6 +4289,112 @@
       width: 100%;
       max-width: none;
       border-radius: var(--radius) var(--radius) 0 0;
+    }
+  }
+  @media (max-width: 600px) {
+    /* No floating cards: bar, strip and panel sit flush, so the photo gets the room. */
+    .app:not(.empty) {
+      gap: 0;
+      padding: 0;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .app:not(.empty) > :is(.bar, .strip, .panel) {
+      box-shadow: none;
+      border-radius: 0;
+      border-width: 0;
+    }
+    .app:not(.empty) > .bar {
+      border-bottom-width: 1px;
+      background: var(--surface);
+    }
+    .bar {
+      min-height: 52px;
+      gap: 2px;
+      padding: 6px 8px 6px 12px;
+      min-width: 0;
+    }
+    /* On the start page the name introduces the app; while editing, the icon is enough. */
+    .app:not(.empty) .wm-text {
+      display: none;
+    }
+    .bar-tools {
+      gap: 0;
+    }
+    .ratio {
+      gap: 8px;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+    }
+    .icon-btn {
+      width: 38px;
+      height: 38px;
+    }
+    .icon-btn :global(svg) {
+      width: 20px;
+      height: 20px;
+    }
+    .bar-export {
+      margin-left: 6px;
+      padding: 8px 14px;
+      font-size: 0.9rem;
+    }
+    .strip {
+      padding: 6px 10px;
+      background: transparent;
+    }
+    .frame-pick,
+    .frame-add {
+      height: 40px;
+    }
+    .frame-add {
+      width: 40px;
+    }
+    .strip ol {
+      gap: 8px;
+    }
+    /* The panel becomes a bottom sheet: fixed height, only its content scrolls. */
+    .app > .panel {
+      height: 44dvh;
+      max-height: none;
+      border-top-width: 1px;
+      border-radius: 18px 18px 0 0;
+    }
+    .modes {
+      margin: 8px 12px 0;
+    }
+    .modes button {
+      padding: 6px 12px;
+      font-size: 0.85rem;
+    }
+    .tabs,
+    .tabs.many {
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: none;
+      gap: 2px;
+      padding: 6px 8px;
+    }
+    .tabs .tab,
+    .tabs.many .tab {
+      flex: none;
+      min-width: 60px;
+      gap: 3px;
+      padding: 6px 4px;
+      font-size: 0.7rem;
+    }
+    .tab svg {
+      width: 20px;
+      height: 20px;
+    }
+    /* Explanations stay one tap away (the ⓘ on each slider); the histogram is a desktop luxury. */
+    .tool-hint,
+    .body > :global(.histo) {
+      display: none;
+    }
+    .body {
+      padding: 12px 14px 16px;
+      gap: 14px;
     }
   }
 </style>
