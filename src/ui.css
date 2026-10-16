@@ -1,0 +1,304 @@
+/*
+ * ui.css — shared building blocks (buttons, segmented controls, switches, inputs, dialogs).
+ * Global so every component can use them; layout and one-off styles stay in their components.
+ */
+
+/* ── Surfaces ────────────────────────────────────────────────────────── */
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius);
+}
+.card {
+  width: min(420px, 100%);
+  background: var(--glass-strong);
+}
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.45);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 18px;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: background 150ms, border-color 150ms, transform 120ms;
+}
+.btn svg {
+  width: 18px;
+  height: 18px;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn.accent {
+  background: var(--accent);
+  color: #111;
+}
+.btn.accent:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+.btn.ghost {
+  border: 1px solid var(--glass-line);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.btn.big {
+  padding: 15px 26px;
+  font-size: 1.05rem;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.mini-del {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  color: #111;
+  font-size: 0.9rem;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+.close {
+  margin-left: auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 1.3rem;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* ── Segmented control ───────────────────────────────────────────────── */
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--glass-line);
+}
+.seg button {
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  font-weight: 550;
+  color: var(--muted);
+  transition: background 150ms, color 150ms;
+}
+.seg button:hover:not(:disabled) {
+  color: var(--text);
+}
+.seg button[aria-pressed="true"] {
+  background: var(--text);
+  color: var(--surface);
+}
+.seg.wrap {
+  display: flex;
+  flex-wrap: wrap;
+  background: none;
+  border: 0;
+  padding: 0;
+  gap: 6px;
+}
+.seg.wrap button {
+  border: 1px solid var(--glass-line);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.seg.wrap button[aria-pressed="true"] {
+  background: var(--text);
+  color: var(--surface);
+}
+
+/* ── Text and layout ─────────────────────────────────────────────────── */
+.stack {
+  display: grid;
+  gap: 20px;
+}
+/* Grid items default to their content's width; a sideways-scrolling row inside would widen the whole stack. */
+.stack > * {
+  min-width: 0;
+}
+.label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.hint {
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.hint.warn {
+  color: var(--accent-ink);
+}
+.sub {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-line);
+}
+.row-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.row-btns > * {
+  flex: 1 1 auto;
+}
+.actions {
+  display: grid;
+  gap: 8px;
+}
+.actions.row {
+  grid-template-columns: 1fr 1.4fr;
+}
+.status {
+  font-size: 0.92rem;
+}
+
+/* ── Switch ──────────────────────────────────────────────────────────── */
+/* Switch */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 0.93rem;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.switch-track {
+  flex: none;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  position: relative;
+  transition: background 150ms;
+}
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.3);
+  transition: translate 150ms;
+}
+.switch input:checked + .switch-track {
+  background: var(--accent);
+}
+.switch input:checked + .switch-track::after {
+  translate: 18px 0;
+}
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+/* ── Text input ──────────────────────────────────────────────────────── */
+.text {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--field);
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  font-size: 0.92rem;
+}
+.text:focus {
+  border-color: var(--accent-ink);
+  outline: none;
+}
+.text:disabled {
+  opacity: 0.4;
+}
+
+/* ── Dialogs ─────────────────────────────────────────────────────────── */
+.sheet {
+  margin: auto;
+  width: min(500px, calc(100% - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  color: var(--text);
+  background: var(--glass-strong);
+}
+.sheet[open] {
+  animation: rise 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.sheet::backdrop {
+  background: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(4px);
+}
+.sheet-in {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  padding-bottom: max(22px, env(safe-area-inset-bottom));
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+}
+.sheet-in h2 {
+  font-stretch: 112%;
+  font-weight: 750;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+fieldset {
+  border: 0;
+}
+
+/* ── Spinner ─────────────────────────────────────────────────────────── */
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex: none;
+}
+@keyframes spin {
+  to { rotate: 360deg; }
+}
+@keyframes rise {
+  from { translate: 0 24px; opacity: 0; }
+}
+
+@media (max-width: 899px) {
+  .sheet {
+    margin: auto 0 0;
+    width: 100%;
+    max-width: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+}
