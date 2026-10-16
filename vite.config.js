@@ -19,6 +19,18 @@ export default defineConfig({
         display: 'standalone',
         orientation: 'any',
         start_url: '/',
+        // Lets the installed app appear in the phone's share sheet (handled by public/share-target.js).
+        share_target: {
+          action: 'share-target',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: {
+            files: [{
+              name: 'photos',
+              accept: ['image/*', '.dng', '.arw', '.cr2', '.cr3', '.nef', '.raf', '.orf', '.rw2', '.pef', '.srw'],
+            }],
+          },
+        },
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
@@ -28,6 +40,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2,wasm}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // the LibRaw wasm is ~1.4 MB
+        importScripts: ['share-target.js'],
       },
     }),
   ],

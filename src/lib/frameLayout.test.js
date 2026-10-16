@@ -64,4 +64,36 @@ for (const [srcW, srcH] of [[1080, 720], [720, 1080], [1080, 1080]]) {
   }
 }
 
-console.log(`frameLayout: ${n} layouts OK`);
+// Camera-brand bar: every part inside the canvas, beside (not over) the photo, and no overlaps between parts.
+let bars = 0;
+for (const [srcW, srcH] of [[1080, 720], [720, 1080], [6000, 4000], [400, 1200]]) {
+  for (const [ratioId, wh] of Object.entries(RATIOS)) {
+    for (const zone of ['top', 'bottom']) {
+      for (const fontSize of [10, 24, 80]) {
+        for (const brand of ['', 'FUJIFILM']) {
+          for (const set of [lines, lines.slice(0, 1), [lines[2]]]) {
+            const L = computeFrameLayout(srcW, srcH, set, {
+              marginH: 0, marginV: 0, ratioId, ratio: wh && { w: wh[0], h: wh[1] }, captionSpace: 12,
+              fontSize, zone, align: 'left', posX: 0, posY: 50, measure, style: 'bar', brand,
+            });
+            const c = L.caption;
+            const where = JSON.stringify({ srcW, srcH, ratioId, zone, fontSize, brand, n: set.length });
+            const bottom = c.y0 + c.blockH;
+            assert.equal(c.style, 'bar');
+            if (zone === 'bottom') assert.ok(c.y0 >= L.imgY + srcH - 0.5, `bar covers photo: ${where}`);
+            else assert.ok(bottom <= L.imgY + 0.5, `bar covers photo: ${where}`);
+            assert.ok(c.y0 >= 0 && bottom <= L.canvasH + 0.5, `bar off canvas: ${where}`);
+            // Left block, brand and right block stay inside the photo's width, in that order.
+            const leftEnd = c.left.x + Math.max(0, ...c.left.lines.map((l, i) => measure(l.text, i ? c.sub : c.size)));
+            const brandStart = c.brand ? c.brand.x - c.brand.width : c.right.x - c.width + (leftEnd - c.left.x);
+            assert.ok(c.left.x >= L.imgX && c.right.x <= L.imgX + srcW + 0.5, `bar wider than photo: ${where}`);
+            if (c.brand && c.left.lines.length) assert.ok(leftEnd <= brandStart + 0.5, `left text runs into brand: ${where}`);
+            bars++;
+          }
+        }
+      }
+    }
+  }
+}
+
+console.log(`frameLayout: ${n} layouts + ${bars} bars OK`);

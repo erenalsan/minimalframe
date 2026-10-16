@@ -41,3 +41,11 @@ for (const [raw, want] of Object.entries(lenses)) assert.equal(cleanLens(raw), w
 for (const want of Object.values(cameras)) assert.equal(cleanCamera(want), want, want);
 for (const want of Object.values(lenses)) assert.equal(cleanLens(want), want, want);
 console.log('exifCleaner: OK');
+
+const { cameraBrand } = await import('./exifCleaner.js');
+assert.equal(cameraBrand('SONY ILCE-7M3'), 'Sony');
+assert.equal(cameraBrand('X-T5'), 'Fujifilm');
+assert.equal(cameraBrand('NIKON CORPORATION NIKON Z 6_2'), 'Nikon');
+assert.equal(cameraBrand('Some Camera'), '');
+assert.equal(cameraBrand(''), '');
+console.log('cameraBrand: OK');

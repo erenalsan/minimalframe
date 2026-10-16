@@ -19,7 +19,10 @@
   import { computeFrameLayout, autoBorderAxis } from "./lib/frameLayout.js";
   import { extractPalette, tint } from "./lib/palette.js";
   import { idbGet, idbSet } from "./lib/store.js";
-  import { cleanCamera, cleanLens } from "./lib/exifCleaner.js";
+  import { cleanCamera, cleanLens, cameraBrand } from "./lib/exifCleaner.js";
+  import { parseCube } from "./lib/lut.js";
+  import { parseRecipe } from "./lib/recipes.js";
+  import { imageStats, matchLook } from "./lib/matchLook.js";
   import {
     CROP_DEFAULT,
     CROP_RATIOS,
@@ -42,6 +45,8 @@
     downscaleLinear,
     cssFilterFor,
     histogram,
+    registerLut,
+    unregisterLut,
   } from "./lib/developEngine.js";
 
   // ─── Mode Navigation ───────────────────────────────────────────────────────
@@ -100,8 +105,10 @@
     position: "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
     logo: "M12 7a5 5 0 100 10 5 5 0 000-10zM12 2a10 10 0 100 20 10 10 0 000-20z",
     export: "M12 3v12M7 10l5 5 5-5M5 21h14",
+    grid: "M4 4h4.5v4.5H4zM9.75 4h4.5v4.5h-4.5zM15.5 4H20v4.5h-4.5zM4 9.75h4.5v4.5H4zM9.75 9.75h4.5v4.5h-4.5zM15.5 9.75H20v4.5h-4.5zM4 15.5h4.5V20H4zM9.75 15.5h4.5V20h-4.5zM15.5 15.5H20V20h-4.5z",
   };
   let exportDialog = $state.raw(null);
+  let gridDialog = $state.raw(null);
   let fileInput = $state.raw(null);
   let canvasAspect = $state(4 / 5); // preview box ratio; updated whenever the canvas is resized
 
@@ -226,6 +233,10 @@
     look("fade", "Fade", { contrast: -20, blacks: 30, temperature: 8, saturation: -15, filmGrain: 15 }),
     look("moody", "Moody", { exposure: -0.3, contrast: 25, highlights: -30, blacks: -15, temperature: -15, saturation: -20, filmGrain: 25, softBloom: 30 }),
     look("bw-contrast", "Silver", { contrast: 35, whites: 10, blacks: -10, saturation: -100, filmGrain: 20 }),
+    look("r-chrome", "Chrome film", parseRecipe("Film Simulation: Classic Chrome\nDynamic Range: DR200\nHighlight: -1\nShadow: +1\nColor: +1\nGrain Effect: Weak, Small\nWhite Balance: Daylight, +2 Red & -3 Blue").params),
+    look("r-neg", "Street neg", parseRecipe("Film Simulation: Classic Negative\nHighlight: -1\nShadow: +0.5\nColor: +2\nClarity: -2\nGrain Effect: Weak, Large\nWhite Balance: Auto, +1 Red & -2 Blue").params),
+    look("r-eterna", "Cinema", parseRecipe("Film Simulation: Eterna\nDynamic Range: DR400\nShadow: +1\nColor: +1\nWhite Balance: Auto, -1 Red & +1 Blue").params),
+    look("r-acros", "Acros red", parseRecipe("Film Simulation: Acros+R\nHighlight: +1\nShadow: +2\nGrain Effect: Strong, Small").params),
   ];
 
   // Copies (never shares) the look's nested curve and mixer, so later edits don't change the look itself.
@@ -235,6 +246,77 @@
   function applyEditsToSelected() {
     const src = $state.snapshot(dev);
     for (const f of filesList) if (f.selected && f !== activeItem) Object.assign(f.dev, JSON.parse(JSON.stringify(src)));
+  }
+
+  // ─── Imported .cube LUTs ───────────────────────────────────────────────────
+  // Kept on this device (IndexedDB, with their colour data); edits refer to them by id.
+  const LUTS_KEY = "luts";
+  let luts = $state([]); // [{ id, name }]
+  idbGet(LUTS_KEY).then((saved) => {
+    for (const l of saved ?? []) registerLut(l.id, l);
+    luts = (saved ?? []).map(({ id, name }) => ({ id, name }));
+    if (luts.length) scheduleRender(true);
+  });
+  async function importLuts(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    const saved = (await idbGet(LUTS_KEY)) ?? [];
+    for (const [i, file] of files.entries()) {
+      try {
+        const parsed = parseCube(await file.text());
+        const entry = { id: `lut_${Date.now()}_${i}`, name: parsed.title || file.name.replace(/\.cube$/i, ""), ...parsed };
+        registerLut(entry.id, entry);
+        saved.push(entry);
+        luts = [...luts, { id: entry.id, name: entry.name }];
+        dev.lut = entry.id;
+      } catch (err) {
+        loadError = `Could not read ${file.name}: ${err.message}`;
+      }
+    }
+    await idbSet(LUTS_KEY, saved);
+  }
+  async function deleteLut(id) {
+    unregisterLut(id);
+    luts = luts.filter((l) => l.id !== id);
+    for (const f of filesList) if (f.dev.lut === id) f.dev.lut = "";
+    await idbSet(LUTS_KEY, ((await idbGet(LUTS_KEY)) ?? []).filter((l) => l.id !== id));
+  }
+  // Per-LUT previews of the active photo, rendered by the real engine.
+  let lutThumbs = $state({});
+  $effect(() => {
+    const small = activeItem?.small;
+    const list = luts;
+    if (!small || !canDevelop) return;
+    const out = document.createElement("canvas");
+    lutThumbs = Object.fromEntries(list.map((l) => [l.id, develop(small, { ...freshDev(), lut: l.id }, out).toDataURL("image/jpeg", 0.8)]));
+  });
+
+  // ─── Fujifilm recipes ──────────────────────────────────────────────────────
+  let recipeText = $state("");
+  let recipeNote = $state("");
+  let recipeName = "";
+  function applyRecipe() {
+    const r = parseRecipe(recipeText);
+    if (!r.sim && JSON.stringify(r.params) === JSON.stringify(freshDev())) {
+      recipeNote = "No recipe settings found. Paste lines like “Film Simulation: Classic Chrome”, “Highlight: -1”.";
+      return;
+    }
+    Object.assign(dev, r.params);
+    recipeName = r.name;
+    recipeNote = r.ignored.length ? `Applied. Not available here: ${r.ignored.map((l) => l.split(":")[0]).join(", ")}.` : "Applied.";
+  }
+
+  // ─── Match look ────────────────────────────────────────────────────────────
+  // Makes photos look like one shoot: brightness, white balance, contrast and colour follow a reference photo.
+  const pixels = (c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+  function matchItemTo(item, ref) {
+    const work = document.createElement("canvas");
+    const target = imageStats(pixels(develop(ref.small, ref.dev, work)));
+    const next = matchLook($state.snapshot(item.dev), target, (p) => imageStats(pixels(develop(item.small, p, work))));
+    Object.assign(item.dev, next);
+  }
+  function matchSelectedToActive() {
+    for (const f of filesList) if (f.selected && f !== activeItem) matchItemTo(f, activeItem);
   }
 
   // Your own looks ("recipes"), saved on this device.
@@ -318,6 +400,7 @@
 
   // EXIF Typography & Custom Fonts
   let showExif = $state(true);
+  let captionStyle = $state("stack"); // "stack" | "bar" (camera-brand bar: model left, brand and settings right)
   let cleanNames = $state(true); // "ILCE-7RM4" → "Sony A7R IV" on the frame; the typed text is kept as is
 
   // Bundled fonts (see fonts.js) work offline; "system", "serif" and "mono" use what every device has.
@@ -550,6 +633,7 @@
     textPosY: 50,
     autoFontSize: true,
     showExif: true,
+    captionStyle: "stack",
     ...fields,
     textPosX: { left: 0, center: 50, right: 100 }[fields.textAlign ?? "left"],
   });
@@ -563,6 +647,8 @@
     tpl("kraft", "Kraft", { selectedRatioId: "4:5", customMarginH: 10, customMarginV: 10, backgroundColor: "#e7dcc8", selectedFontId: "playfair", textAlign: "center" }),
     tpl("filmborder", "Film border", { selectedRatioId: "custom", customMarginH: 4, customMarginV: 4, backgroundColor: "#000000", selectedFontId: "spacemono", textAlign: "left", filmGrain: 20 }),
     tpl("cinema", "Cinema", { selectedRatioId: "16:9", customMarginH: 5, customMarginV: 5, backgroundColor: "#000000", selectedFontId: "bebas", textAlign: "center", filmGrain: 25, softBloom: 20 }),
+    tpl("brandbar", "Brand bar", { selectedRatioId: "orig", customMarginH: 0, customMarginV: 0, captionSpace: 0, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left", captionStyle: "bar", autoFontSize: false, manualFontSize: 22 }),
+    tpl("brandbar-dark", "Brand bar dark", { selectedRatioId: "4:5", customMarginH: 0, customMarginV: 0, backgroundColor: "#111111", selectedFontId: "montserrat", textAlign: "left", captionStyle: "bar", autoFontSize: false, manualFontSize: 22 }),
     tpl("story", "Story poster", { selectedRatioId: "9:16", customMarginH: 8, customMarginV: 8, backgroundColor: "#111111", selectedFontId: "bebas", textAlign: "center" }),
   ];
 
@@ -583,7 +669,7 @@
   // Every frame setting in one plain object: used by templates and by undo/redo.
   const frameSnapshot = () => ({
     customMarginH, customMarginV, captionSpace, selectedRatioId, backgroundColor, textColor, autoContrast,
-    textPosX, textPosY, textAlign, textZone, selectedFontId, autoFontSize, manualFontSize, showExif, cleanNames,
+    textPosX, textPosY, textAlign, textZone, selectedFontId, autoFontSize, manualFontSize, showExif, cleanNames, captionStyle,
     logoScale, logoOpacity, logoPosX, logoPosY, exifDisplay: { ...exifDisplay },
   });
 
@@ -619,6 +705,7 @@
     const out = freshDev();
     if (!d || typeof d !== "object") return out;
     for (const [k, v] of Object.entries(DEV_DEFAULTS)) if (typeof v === "number" && isNum(d[k])) out[k] = d[k];
+    if (typeof d.lut === "string" && /^lut_[\w]{1,40}$/.test(d.lut)) out.lut = d.lut; // only works if that LUT is on this device
     for (const ch of ["rgb", "r", "g", "b"]) if (isPoints(d.curve?.[ch])) out.curve[ch] = d.curve[ch];
     for (const band of MIXER_BANDS) {
       const m = d.mixer?.[band];
@@ -697,6 +784,7 @@
     if (p.manualFontSize !== undefined) manualFontSize = p.manualFontSize;
     if (p.showExif !== undefined) showExif = p.showExif;
     if (p.cleanNames !== undefined) cleanNames = p.cleanNames;
+    captionStyle = p.captionStyle === "bar" ? "bar" : "stack";
     if (p.logoScale !== undefined) logoScale = p.logoScale;
     if (p.logoOpacity !== undefined) logoOpacity = p.logoOpacity;
     if (p.logoPosX !== undefined) logoPosX = p.logoPosX;
@@ -784,11 +872,68 @@
   }
 
   onMount(() => {
+    if (new URLSearchParams(location.search).has("shared")) loadSharedFiles();
     loadPalettes();
     loadPresets();
     // Canvas text can't swap fonts by itself; redraw once the bundled caption font is ready.
     document.fonts?.ready.then(() => scheduleRender());
   });
+
+  // ─── Instagram grid preview ────────────────────────────────────────────────
+  // Profile grids show the newest post first, cropped to 3:4; carousels show their first slide.
+  let gridCells = $state([]); // [{ id, url }] newest first
+  const loadImage = (url) => new Promise((ok, fail) => Object.assign(new Image(), { onload: (e) => ok(e.target), onerror: fail, src: url }));
+  async function renderGrid() {
+    const posts = filesList.filter((f) => f.selected);
+    gridCells = await Promise.all(
+      posts.map(async (f) => {
+        const framed = drawFramed(document.createElement("canvas"), await loadImage(f.thumbUrl), f.exifOverride);
+        if (slices <= 1) return { id: f.id, url: framed.toDataURL("image/jpeg", 0.85) };
+        const first = document.createElement("canvas");
+        first.width = Math.round(framed.width / slices);
+        first.height = framed.height;
+        first.getContext("2d").drawImage(framed, 0, 0);
+        return { id: f.id, url: first.toDataURL("image/jpeg", 0.85) };
+      }),
+    );
+    gridCells.reverse();
+  }
+  function openGrid() {
+    renderGrid();
+    gridDialog?.showModal();
+  }
+  // Posting order follows the strip: earlier in the strip = posted first = lower on the grid.
+  function movePost(id, towardTop) {
+    const i = filesList.findIndex((f) => f.id === id);
+    const step = towardTop ? 1 : -1;
+    let j = i + step;
+    while (j >= 0 && j < filesList.length && !filesList[j].selected) j += step;
+    if (j < 0 || j >= filesList.length) return;
+    const active = filesList[activeImageIndex];
+    const next = [...filesList];
+    [next[i], next[j]] = [next[j], next[i]];
+    filesList = next;
+    activeImageIndex = filesList.indexOf(active);
+    renderGrid();
+  }
+
+  // Photos sent with "Share to MinimalFrame" wait in a cache the service worker filled; open them once.
+  async function loadSharedFiles() {
+    history.replaceState(null, "", location.pathname);
+    try {
+      const cache = await caches.open("mf-shared");
+      const files = [];
+      for (const req of await cache.keys()) {
+        const res = await cache.match(req);
+        const name = new URL(req.url).searchParams.get("name") || "shared.jpg";
+        files.push(new File([await res.blob()], name, { type: res.headers.get("content-type") || "" }));
+        await cache.delete(req);
+      }
+      if (files.length) loadFiles(files);
+    } catch (err) {
+      loadError = `Could not open the shared photos: ${err.message}`;
+    }
+  }
 
   // ─── Canvas Refs & Dimensions ──────────────────────────────────────────────
   let canvasEl = $state.raw(null);
@@ -1087,6 +1232,7 @@
               "ExposureTime",
               "ISO",
               "DateTimeOriginal",
+              "GPSLatitude",
             ],
           });
           if (rawExif?.Orientation) {
@@ -1191,6 +1337,7 @@
           palette,
           rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
           selected: true,                   // included in batch export
+          hadGps: rawExif?.GPSLatitude != null || rawExif?.latitude != null, // exports never contain it
           small,                            // 160px source for looks and strip thumbnails
           dev: freshDev(),                  // this photo's own edits
           crop: null,                       // this photo's crop / rotation (see geometry.js)
@@ -1442,8 +1589,10 @@
       align: textAlign,
       posX: textPosX,
       posY: textPosY,
-      measure: (text, px) => {
-        measureCtx.font = `600 ${px}px ${captionFamily()}`;
+      style: captionStyle,
+      brand: cameraBrand(exifOverride?.model).toUpperCase(),
+      measure: (text, px, weight = 600) => {
+        measureCtx.font = `${weight} ${px}px ${captionFamily()}`;
         return measureCtx.measureText(text).width;
       },
     });
@@ -1460,7 +1609,32 @@
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, L.canvasW, L.canvasH);
     ctx.drawImage(photo, L.imgX, L.imgY);
-    if (L.caption) {
+    if (L.caption?.style === "bar") {
+      const c = L.caption;
+      const fam = captionFamily();
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = textColor;
+      for (const [block, align] of [[c.left, "left"], [c.right, "right"]]) {
+        ctx.textAlign = align;
+        block.lines.forEach((line, i) => {
+          ctx.globalAlpha = i ? 0.62 : 1; // second row (lens, date) is quieter
+          ctx.font = `${i ? 400 : 600} ${i ? c.sub : c.size}px ${fam}`;
+          ctx.fillText(line.text, block.x, block.ys[i]);
+        });
+      }
+      ctx.globalAlpha = 1;
+      if (c.brand) {
+        ctx.textAlign = "right";
+        ctx.font = `800 ${c.brand.size}px ${fam}`;
+        ctx.fillText(c.brand.text, c.brand.x, c.brand.y);
+      }
+      if (c.divider) {
+        ctx.globalAlpha = 0.3;
+        const w = Math.max(1, c.size * 0.07);
+        ctx.fillRect(c.divider.x - w / 2, c.divider.y1, w, c.divider.y2 - c.divider.y1);
+        ctx.globalAlpha = 1;
+      }
+    } else if (L.caption) {
       const { lines, size, x, y0, lineH } = L.caption;
       ctx.textAlign = textAlign;
       ctx.textBaseline = "middle";
@@ -1570,6 +1744,7 @@
     const _tc = textColor;
     const _se = showExif;
     const _cn = cleanNames;
+    const _cs = captionStyle;
     const _ta = textAlign;
     const _tz = textZone;
     const _tx = textPosX;
@@ -1876,6 +2051,7 @@
           onkeydown={(e) => (e.key === " " || e.key === "Enter") && (showOriginal = true)}
           onkeyup={() => (showOriginal = false)}
         >{@render icon("compare")}</button>
+        <button class="icon-btn" onclick={openGrid} aria-label="Preview on your Instagram grid" title="Preview on your Instagram grid">{@render icon("grid")}</button>
       </div>
       <button
         class="btn accent bar-export"
@@ -2068,6 +2244,69 @@
             {#if selectedCount > 1}
               <button class="btn ghost" onclick={applyEditsToSelected}>Apply these edits to the other {selectedCount - 1} selected</button>
             {/if}
+
+            {#if canDevelop}
+              <section class="sub">
+                <p class="label">LUTs</p>
+                <p class="hint">Import .cube files from Lightroom, Resolve or your favourite creators.</p>
+                <div class="looks">
+                  {#each luts as l (l.id)}
+                    <div class="look-cell">
+                      <button class="look" aria-pressed={dev.lut === l.id} onclick={() => (dev.lut = dev.lut === l.id ? "" : l.id)}>
+                        <img src={lutThumbs[l.id] ?? activeItem?.thumbUrl} alt="" />
+                        <span>{l.name}</span>
+                      </button>
+                      <button class="mini-del" onclick={() => deleteLut(l.id)} aria-label="Delete LUT {l.name}">×</button>
+                    </div>
+                  {/each}
+                  <label class="look look-add">
+                    <input type="file" accept=".cube" multiple class="sr-only" onchange={importLuts} />
+                    <span aria-hidden="true">+</span><span>Import .cube</span>
+                  </label>
+                </div>
+                {#if dev.lut}
+                  <Dial id="d-lut" label="LUT strength" bind:value={dev.lutAmount} unit="%" reset={100} hint="Blend between your edit and the LUT. Applied on top of all other edits." />
+                {/if}
+              </section>
+
+              {#if filesList.length > 1}
+                <section class="sub">
+                  <p class="label">Match look</p>
+                  <p class="hint">Make this photo's brightness, white balance, contrast and colour follow another photo.</p>
+                  <div class="match-row">
+                    {#each filesList as f, i (f.id)}
+                      {#if f !== activeItem}
+                        <button class="match-pick" onclick={() => matchItemTo(activeItem, f)} aria-label="Match to {f.name}" title="Match to {f.name}">
+                          <img src={f.thumbUrl} alt="" />
+                        </button>
+                      {/if}
+                    {/each}
+                  </div>
+                  {#if selectedCount > 1}
+                    <button class="btn ghost" onclick={matchSelectedToActive}>Match the other {selectedCount - 1} selected to this photo</button>
+                  {/if}
+                </section>
+              {/if}
+            {/if}
+
+            <details class="sub recipe">
+              <summary class="label">Paste a Fujifilm recipe</summary>
+              <textarea
+                class="text"
+                rows="7"
+                bind:value={recipeText}
+                placeholder={"Film Simulation: Classic Chrome\nDynamic Range: DR400\nHighlight: -1\nShadow: +1\nColor: +2\nWhite Balance: Daylight, +2 Red & -4 Blue\nGrain Effect: Weak, Small"}
+                aria-label="Fujifilm recipe text"
+              ></textarea>
+              <div class="row-btns">
+                <button class="btn accent" onclick={applyRecipe} disabled={!recipeText.trim()}>Apply recipe</button>
+                {#if recipeNote.startsWith("Applied")}
+                  <button class="btn ghost" onclick={() => { saveKind = "look"; newPresetName = recipeName; showSavePresetModal = true; }}>Save as my look</button>
+                {/if}
+              </div>
+              {#if recipeNote}<p class="hint" role="status">{recipeNote}</p>{/if}
+              <p class="hint">Film simulations are approximations of Fujifilm's in-camera looks.</p>
+            </details>
           {:else if tool === "crop"}
             <div class="stack">
               <div>
@@ -2296,6 +2535,13 @@
                   <span class="switch-track" aria-hidden="true"></span>
                   Clean metadata names
                 </label>
+                <div>
+                  <p class="label">Layout</p>
+                  <div class="seg">
+                    <button aria-pressed={captionStyle === "stack"} onclick={() => (captionStyle = "stack")}>Stacked</button>
+                    <button aria-pressed={captionStyle === "bar"} onclick={() => (captionStyle = "bar")} title="Model and lens on the left; brand and settings on the right, like a camera watermark">Brand bar</button>
+                  </div>
+                </div>
                 {#if activeItem}
                   <div class="fields">
                     {#each EXIF_FIELDS as [key, name, example] (key)}
@@ -2475,6 +2721,10 @@
             </div>
           </div>
         </div>
+        <p class="privacy">
+          🔒 Saved without metadata: no GPS location, serial numbers or camera data in the file{#if filesList.some((f) => f.hadGps)}.
+            {filesList.filter((f) => f.hadGps).length === 1 ? "1 photo had" : `${filesList.filter((f) => f.hadGps).length} photos had`} a GPS location, now removed{/if}.
+        </p>
         {#if sizeEstimate}<p class="estimate">{sizeEstimate} per {slices > 1 ? "carousel" : "photo"}</p>{/if}
         <p class="hint">
           {exportPrefs.format === "png"
@@ -2510,6 +2760,31 @@
           <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>Download didn't start? Save {fallbackFilename}</a>
         {/if}
       {/if}
+    </div>
+  </dialog>
+
+  <dialog bind:this={gridDialog} class="sheet glass" aria-labelledby="grid-title" onclick={(e) => e.target === gridDialog && gridDialog.close()}>
+    <div class="sheet-in">
+      <div class="sheet-head">
+        <h2 id="grid-title">Your grid</h2>
+        <button class="close" onclick={() => gridDialog.close()} aria-label="Close">×</button>
+      </div>
+      <p class="hint">How the selected photos will sit on your Instagram profile if you post them in strip order: the last one ends up top left.</p>
+      <ol class="ig-grid">
+        {#each gridCells as cell, i (cell.id)}
+          <li>
+            <img src={cell.url} alt="Post {gridCells.length - i}" />
+            <span class="ig-order">
+              <button onclick={() => movePost(cell.id, true)} disabled={i === 0} aria-label="Post later (move up the grid)">‹</button>
+              <button onclick={() => movePost(cell.id, false)} disabled={i === gridCells.length - 1} aria-label="Post earlier (move down the grid)">›</button>
+            </span>
+          </li>
+        {/each}
+        {#each Array.from({ length: (3 - (gridCells.length % 3)) % 3 + 3 }) as _, k (k)}
+          <li class="ig-old" aria-hidden="true"></li>
+        {/each}
+      </ol>
+      <p class="hint">Grey tiles stand for your earlier posts. Only photos ticked in the strip are included.</p>
     </div>
   </dialog>
 
@@ -3106,7 +3381,9 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    overflow: hidden;
+    /* clip, not hidden: a hidden container can still be scrolled by focus (e.g. the visually hidden
+       .cube file input), which pushed the tabs out of view with no way to scroll back. */
+    overflow: clip;
   }
   .seg {
     display: inline-flex;
@@ -3774,6 +4051,113 @@
   /* ── Panel extras ──────────────────────────────────────────────────────── */
   .look-cell {
     position: relative;
+  }
+  .sub {
+    display: grid;
+    gap: 10px;
+    padding-top: 14px;
+    border-top: 1px solid var(--glass-line);
+  }
+  .look-add {
+    display: grid;
+    place-content: center;
+    gap: 2px;
+    aspect-ratio: 1;
+    border: 1px dashed color-mix(in srgb, var(--text) 30%, transparent);
+    border-radius: 12px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    text-align: center;
+    cursor: pointer;
+  }
+  .look-add span:first-of-type {
+    font-size: 1.5rem;
+    line-height: 1;
+  }
+  .match-row {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .match-pick {
+    flex: none;
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--glass-line);
+  }
+  .match-pick:hover {
+    outline: 2px solid var(--accent-ink);
+  }
+  .match-pick img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .recipe summary {
+    cursor: pointer;
+  }
+  .recipe textarea {
+    width: 100%;
+    resize: vertical;
+    font: 0.85rem/1.45 ui-monospace, "Space Mono", monospace;
+  }
+  .privacy {
+    font-size: 0.85rem;
+    line-height: 1.45;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--field);
+  }
+  .ig-grid {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3px;
+    margin: 4px 0;
+  }
+  .ig-grid li {
+    position: relative;
+    aspect-ratio: 3 / 4;
+    overflow: hidden;
+    background: var(--field);
+  }
+  .ig-grid img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .ig-old {
+    background: repeating-linear-gradient(45deg, var(--field) 0 8px, transparent 8px 16px) !important;
+  }
+  .ig-order {
+    position: absolute;
+    inset: auto 4px 4px;
+    display: flex;
+    justify-content: space-between;
+    opacity: 0;
+    transition: opacity 150ms;
+  }
+  .ig-grid li:hover .ig-order,
+  .ig-grid li:focus-within .ig-order {
+    opacity: 1;
+  }
+  .ig-order button {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.6);
+    color: #fff;
+    font-size: 1.1rem;
+  }
+  @media (hover: none) {
+    .ig-order {
+      opacity: 1;
+    }
   }
   .row-btns {
     display: flex;

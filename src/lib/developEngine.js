@@ -10,7 +10,7 @@
  *      as an integer texture, given a baseline lift and a soft highlight shoulder so clipped-looking detail
  *      stays recoverable.
  *    Order: linear → white balance (Bradford) → exposure → sRGB → (RAW shoulder) → whites/blacks
- *           → highlights/shadows → contrast → tone curve → colour mixer → vibrance/saturation.
+ *           → highlights/shadows → contrast → tone curve → colour mixer → vibrance/saturation → 3D LUT.
  * 2. applyDetail(): clarity and sharpening. These need neighbouring pixels, so they run as a separate pass
  *    on overlapping tiles, with radii relative to the image size so preview and export match.
  */
@@ -35,6 +35,8 @@ export const DEV_DEFAULTS = Object.freeze({
   curve: Object.freeze({ rgb: CURVE_IDENTITY, r: CURVE_IDENTITY, g: CURVE_IDENTITY, b: CURVE_IDENTITY }),
   // Per hue band: [hue shift, saturation, luminance], each -100..100.
   mixer: Object.freeze(Object.fromEntries(MIXER_BANDS.map((b) => [b, Object.freeze([0, 0, 0])]))),
+  lut: '',         // id of an imported .cube LUT (see registerLut), '' = none
+  lutAmount: 100,  // 0..100, blend between the edit and the LUT's output
   filmGrain: 0,    // 0..100, applied by effectsEngine on export
   softBloom: 0,    // 0..100, applied by effectsEngine on export
 });
@@ -63,6 +65,9 @@ uniform sampler2D lut;       // 256×1 tone curve (unit 1)
 uniform bool useLut;
 uniform vec3 mixer[8];       // per hue band: hue shift, saturation, luminance (-1..1)
 uniform bool useMixer;
+uniform highp sampler3D clut; // imported 3D LUT (unit 2)
+uniform bool useClut;
+uniform float clutSize, clutAmount;
 const vec3 W = vec3(0.2126, 0.7152, 0.0722);
 const float CENTERS[8] = float[8](0.0, 30.0, 60.0, 120.0, 180.0, 225.0, 275.0, 320.0);
 
@@ -164,6 +169,12 @@ void main() {
   float sat = clamp(max(s.r, max(s.g, s.b)) - min(s.r, min(s.g, s.b)), 0.0, 1.0);
   s = mix(vec3(L), s, 1.0 + saturation + vibrance * (1.0 - sat));
 
+  // LUTs expect finished, display-referred colour, so they go last.
+  if (useClut) {
+    vec3 c3 = clamp(s, 0.0, 1.0);
+    s = mix(c3, texture(clut, c3 * ((clutSize - 1.0) / clutSize) + 0.5 / clutSize).rgb, clutAmount);
+  }
+
   o = vec4(clamp(s, 0.0, 1.0), 1.0);
 }`;
 
@@ -213,7 +224,8 @@ let glCanvas = null;
 let programs = null; // { srgb8, linear16, blur, detail }
 let lutTex = null;
 let lastLut = null;
-let lastLinearUpload = null; // skips re-uploading an unchanged RAW proxy on every slider tick
+let lastLinearUpload = null;
+const cluts = new Map(); // id → { size, data, tex? } // skips re-uploading an unchanged RAW proxy on every slider tick
 let initTried = false;
 
 function init() {
@@ -252,11 +264,11 @@ function init() {
     return { prog, uniforms };
   };
 
-  const developUniforms = ['exposure', ...SCALED, 'wb', 'useLut', 'useMixer', 'mixer'];
+  const developUniforms = ['exposure', ...SCALED, 'wb', 'useLut', 'useMixer', 'mixer', 'useClut', 'clutSize', 'clutAmount'];
   programs = {
     // NEAREST is required for integer textures and is exact for 1:1 rendering anyway.
-    srgb8: { ...build(`#version 300 es\n${FRAG}`, developUniforms, { img: 0, lut: 1 }), tex: texture(gl.NEAREST) },
-    linear16: { ...build(`#version 300 es\n#define LINEAR16\n${FRAG}`, developUniforms, { img: 0, lut: 1 }), tex: texture(gl.NEAREST) },
+    srgb8: { ...build(`#version 300 es\n${FRAG}`, developUniforms, { img: 0, lut: 1, clut: 2 }), tex: texture(gl.NEAREST) },
+    linear16: { ...build(`#version 300 es\n#define LINEAR16\n${FRAG}`, developUniforms, { img: 0, lut: 1, clut: 2 }), tex: texture(gl.NEAREST) },
     blur: build(BLUR_FRAG, ['dir'], { src: 0 }),
     detail: build(DETAIL_FRAG, ['texel', 'clarity', 'sharpen'], { base: 0, blurred: 1 }),
   };
@@ -306,6 +318,39 @@ function setDevelopUniforms(program, params) {
   const flat = MIXER_BANDS.flatMap((b) => (mixer[b] ?? [0, 0, 0]).map((v) => v / 100));
   gl.uniform1i(u.useMixer, flat.some((v) => v !== 0));
   gl.uniform3fv(u.mixer, flat);
+
+  const clut = params.lut ? cluts.get(params.lut) : null;
+  const amount = (params.lutAmount ?? 100) / 100;
+  gl.uniform1i(u.useClut, Boolean(clut) && amount > 0);
+  if (clut && amount > 0) {
+    gl.activeTexture(gl.TEXTURE2);
+    if (!clut.tex) {
+      clut.tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_3D, clut.tex);
+      for (const k of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, k, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      // Half floats keep smooth gradients and are filterable everywhere WebGL2 runs.
+      gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGB16F, clut.size, clut.size, clut.size, 0, gl.RGB, gl.FLOAT, clut.data);
+    } else {
+      gl.bindTexture(gl.TEXTURE_3D, clut.tex);
+    }
+    gl.uniform1f(u.clutSize, clut.size);
+    gl.uniform1f(u.clutAmount, amount);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+}
+
+/** Makes a parsed LUT ({ size, data } from lut.js) available to develop() as params.lut = id. */
+export function registerLut(id, lut) {
+  const old = cluts.get(id);
+  if (old?.tex && gl) gl.deleteTexture(old.tex);
+  cluts.set(id, { size: lut.size, data: lut.data });
+}
+export function unregisterLut(id) {
+  const old = cluts.get(id);
+  if (old?.tex && gl) gl.deleteTexture(old.tex);
+  cluts.delete(id);
 }
 
 function draw(w, h) {

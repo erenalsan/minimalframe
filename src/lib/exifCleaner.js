@@ -115,3 +115,8 @@ export function cleanLens(name) {
   }
   return s;
 }
+
+/** The brand of a camera string ("SONY ILCE-7M3" → "Sony"), or "" when it can't tell. */
+export function cameraBrand(name) {
+  return name?.trim() ? splitBrand(name)[0] : "";
+}
