@@ -11,6 +11,7 @@
     reset = undefined, // double-tap target; omitted = no reset
     signed = false, // show "+" for positive values (bipolar sliders)
     track = undefined, // optional CSS gradient for the track (e.g. cool → warm)
+    hint = "", // one-line explanation, shown on tap (touch has no hover tooltips)
     id,
   } = $props();
 
@@ -22,11 +23,21 @@
     (signed && value > 0 ? "+" : "") + Number(value).toFixed(decimals),
   );
   const canReset = $derived(reset !== undefined && value !== reset);
+  let hintOpen = $state(false);
 </script>
 
 <div class="dial">
   <div class="dial-head">
     <label for={id}>{label}</label>
+    {#if hint}
+      <button
+        type="button"
+        class="dial-info"
+        title={hint}
+        aria-label="What does {label} do?"
+        aria-expanded={hintOpen}
+        onclick={() => (hintOpen = !hintOpen)}>i</button>
+    {/if}
     {#if canReset}
       <button type="button" class="dial-reset" onclick={() => (value = reset)}>Reset</button>
     {/if}
@@ -43,7 +54,9 @@
     style:--lo="{Math.min(anchor, pos)}%"
     style:--hi="{Math.max(anchor, pos)}%"
     style:--track={track}
+    aria-describedby={hint ? `${id}-hint` : undefined}
   />
+  {#if hint}<p id="{id}-hint" class="dial-hint" hidden={!hintOpen}>{hint}</p>{/if}
 </div>
 
 <style>
@@ -68,7 +81,7 @@
     color: var(--muted);
   }
   output.changed {
-    color: var(--accent);
+    color: var(--accent-ink, var(--accent));
   }
   output small {
     font-size: 0.75rem;
@@ -85,6 +98,29 @@
   .dial-reset:hover {
     color: var(--text);
   }
+  .dial-info {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    margin-left: -4px;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+    font: italic 650 0.66rem/1 Georgia, serif;
+    color: var(--muted);
+    align-self: center;
+  }
+  .dial-info:hover,
+  .dial-info[aria-expanded="true"] {
+    color: var(--text);
+    border-color: var(--accent-ink, var(--accent));
+  }
+  .dial-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--muted);
+  }
 
   input {
     -webkit-appearance: none;
@@ -97,7 +133,7 @@
       /* travelled distance from the neutral point */
       linear-gradient(to right, transparent var(--lo), var(--accent) var(--lo), var(--accent) var(--hi), transparent var(--hi)) center / 100% 4px no-repeat,
       /* optional colour scale, e.g. temperature */
-      var(--track, linear-gradient(rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.18))) center / 100% 4px no-repeat;
+      var(--track, linear-gradient(color-mix(in srgb, var(--text) 18%, transparent), color-mix(in srgb, var(--text) 18%, transparent))) center / 100% 4px no-repeat;
     cursor: pointer;
     touch-action: pan-y;
   }
@@ -107,7 +143,7 @@
     height: 20px;
     border-radius: 50%;
     background: #fff;
-    box-shadow: 0 2px 8px rgb(0 0 0 / 0.45);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.3);
     transition: transform 120ms;
   }
   input:active::-webkit-slider-thumb {
@@ -119,13 +155,13 @@
     border: 0;
     border-radius: 50%;
     background: #fff;
-    box-shadow: 0 2px 8px rgb(0 0 0 / 0.45);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.3);
   }
   input::-moz-range-track {
     background: transparent;
   }
   input:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-ink, var(--accent));
     outline-offset: 2px;
   }
 </style>

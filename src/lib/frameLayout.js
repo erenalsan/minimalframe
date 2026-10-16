@@ -24,10 +24,21 @@
  * @param {number} o.posY  0–100 inside the caption border (0 = next to the photo)
  * @param {(text: string, px: number) => number} o.measure  text width at a given size
  */
+/**
+ * In a fixed ratio, which border the ratio fills by itself: "v" (top and bottom) for photos wider than
+ * the ratio, "h" (sides) for taller ones. A user margin on that axis would only be swallowed by the
+ * padding, so it is ignored, and the other border is the one the user sets. null when no fixed ratio.
+ */
+export function autoBorderAxis(srcW, srcH, ratio) {
+  if (!ratio?.w) return null;
+  return srcW / srcH >= ratio.w / ratio.h ? "v" : "h";
+}
+
 export function computeFrameLayout(srcW, srcH, lines, o) {
   const unit = Math.max(srcW, srcH) / 1080;
-  const padX = Math.round((srcW * o.marginH) / 100);
-  const padY = Math.round((srcH * o.marginV) / 100);
+  const auto = autoBorderAxis(srcW, srcH, o.ratio);
+  const padX = auto === "h" ? 0 : Math.round((srcW * o.marginH) / 100);
+  const padY = auto === "v" ? 0 : Math.round((srcH * o.marginV) / 100);
 
   // Caption size; shrunk so the longest line is never wider than the photo.
   let size = 0, width = 0, blockH = 0, gap = 0, band = 0;

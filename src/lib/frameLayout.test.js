@@ -1,6 +1,6 @@
 // Run: node src/lib/frameLayout.test.js — sweeps layouts and checks the caption always fits the frame.
 import assert from 'node:assert/strict';
-import { computeFrameLayout } from './frameLayout.js';
+import { computeFrameLayout, autoBorderAxis } from './frameLayout.js';
 
 const RATIOS = { orig: null, custom: null, '1:1': [1, 1], '4:5': [4, 5], '9:16': [9, 16], '3:2': [3, 2], '16:9': [16, 9] };
 const measure = (text, px) => text.length * px * 0.6; // generous stand-in for real glyph widths
@@ -48,5 +48,20 @@ for (const [srcW, srcH] of [[1080, 720], [720, 1080], [1080, 1080], [6000, 4000]
 // No caption: plain even border.
 const plain = computeFrameLayout(1000, 500, [], { marginH: 10, marginV: 10, ratioId: 'custom', captionSpace: 12, fontSize: 24, zone: 'bottom', align: 'left', posX: 0, posY: 50, measure });
 assert.deepEqual([plain.canvasW, plain.canvasH, plain.imgX, plain.imgY, plain.caption], [1200, 600, 100, 50, null]);
+
+// Fixed ratio: every step of the border the user sets changes the frame (no dead zone below the ratio's own padding).
+for (const [srcW, srcH] of [[1080, 720], [720, 1080], [1080, 1080]]) {
+  for (const wh of [[1, 1], [4, 5], [9, 16], [16, 9]]) {
+    const ratio = { w: wh[0], h: wh[1] };
+    const key = autoBorderAxis(srcW, srcH, ratio) === 'v' ? 'marginH' : 'marginV';
+    let prev = null;
+    for (let m = 0; m <= 40; m++) {
+      const L = computeFrameLayout(srcW, srcH, [], { marginH: 8, marginV: 8, [key]: m, ratioId: 'r', ratio, captionSpace: 12, fontSize: 24, zone: 'bottom', align: 'left', posX: 0, posY: 50, measure });
+      const k = L.canvasW / srcW; // frame size relative to the photo
+      if (prev !== null) assert.ok(k > prev, `border ${key}=${m} had no effect for ${srcW}x${srcH} in ${wh}`);
+      prev = k;
+    }
+  }
+}
 
 console.log(`frameLayout: ${n} layouts OK`);

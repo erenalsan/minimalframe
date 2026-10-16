@@ -98,7 +98,7 @@
     width: 100%;
     aspect-ratio: 1;
     display: block;
-    background: rgb(0 0 0 / 0.25);
+    background: #1c1c20;
     border-radius: 12px;
     touch-action: none;
     cursor: crosshair;

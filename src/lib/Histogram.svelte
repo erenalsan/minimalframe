@@ -36,7 +36,7 @@
     width: 100%;
     height: 64px;
     display: block;
-    background: rgb(0 0 0 / 0.25);
+    background: #1c1c20;
     border-radius: 12px;
   }
   path {
@@ -54,7 +54,7 @@
     color: var(--muted);
   }
   .on {
-    color: var(--accent);
+    color: var(--accent-ink, var(--accent));
     font-weight: 600;
   }
 </style>

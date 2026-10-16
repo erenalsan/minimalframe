@@ -1,18 +1,35 @@
 /*
  * app.css — MinimalFrame global tokens + reset. Component styles live in the .svelte files.
  *
- * Concept: ambient glass. The backdrop is a deep blur of the current photo, controls float on frosted
- * glass above it, and the accent colour is taken from the photo's own dominant hue (see App.svelte).
+ * Concept: flat and quiet, so the photo is the only colourful thing on screen.
+ * Light or dark follows the device setting; the accent is taken from the photo's hue (see App.svelte).
  */
 :root {
-  --glass: rgb(20 20 26 / 0.5);
-  --glass-strong: rgb(20 20 26 / 0.78);
-  --glass-line: rgb(255 255 255 / 0.13);
-  --text: #fff;
-  --muted: rgb(255 255 255 / 0.68);
-  --accent: #ffc56b; /* fallback; App.svelte derives it from the photo */
-  --radius: 24px;
-  color-scheme: dark;
+  --bg: #f4f4f2;
+  --stage: #e9e8e5; /* behind the photo */
+  --surface: #ffffff; /* bar, panel, strip, dialogs */
+  --line: rgb(0 0 0 / 0.1);
+  --field: rgb(0 0 0 / 0.045); /* inputs and segmented controls */
+  --text: #17171a;
+  --muted: rgb(23 23 26 / 0.62);
+  --accent: #e0a040; /* fallback; App.svelte derives it from the photo */
+  --radius: 14px;
+  /* older names, still used by component styles */
+  --glass: var(--surface);
+  --glass-strong: var(--surface);
+  --glass-line: var(--line);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111113;
+    --stage: #0b0b0c;
+    --surface: #18181b;
+    --line: rgb(255 255 255 / 0.09);
+    --field: rgb(255 255 255 / 0.05);
+    --text: #f2f2f0;
+    --muted: rgb(242 242 240 / 0.6);
+  }
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,7 +37,7 @@
 html { font-size: 15px; }
 
 body {
-  background: #0c0c10;
+  background: var(--bg);
   color: var(--text);
   font-family: "Archivo Variable", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;

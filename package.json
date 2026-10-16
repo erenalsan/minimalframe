@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/frameLayout.test.js && node src/lib/geometry.test.js && node src/lib/color.test.js && node src/lib/palette.test.js"
+    "test": "node src/lib/frameLayout.test.js && node src/lib/geometry.test.js && node src/lib/color.test.js && node src/lib/palette.test.js && node src/lib/exifCleaner.test.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",

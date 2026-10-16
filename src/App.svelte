@@ -16,9 +16,10 @@
   } from "./lib/rawEngine.js";
   import { applyAnalogEffects } from "./lib/effectsEngine.js";
   import Dial from "./lib/Dial.svelte";
-  import { computeFrameLayout } from "./lib/frameLayout.js";
+  import { computeFrameLayout, autoBorderAxis } from "./lib/frameLayout.js";
   import { extractPalette, tint } from "./lib/palette.js";
   import { idbGet, idbSet } from "./lib/store.js";
+  import { cleanCamera, cleanLens } from "./lib/exifCleaner.js";
   import {
     CROP_DEFAULT,
     CROP_RATIOS,
@@ -59,6 +60,24 @@
     ],
   };
   let activeTool = $state({ editor: "looks", framing: "ratio" });
+  // One line under the tabs, so every tool explains itself.
+  const TOOL_HINTS = {
+    looks: "One-tap film looks. Tap again to fine-tune with the other tools.",
+    crop: "Crop, straighten and rotate. Drag the box or its corners.",
+    light: "Brightness and tone: exposure, contrast and recovery of skies and shadows.",
+    color: "White balance and how colorful the photo is.",
+    curve: "Advanced tone control. Tap to add points, drag to shape.",
+    mixer: "Change the hue, saturation or brightness of a single color.",
+    detail: "Texture and sharpness.",
+    film: "Analog grain and a soft glow.",
+    templates: "Ready-made frame styles. Tap one, then adjust anything.",
+    ratio: "Frame shape for each platform: feed, story, carousel or print.",
+    border: "How much frame goes around the photo.",
+    colors: "Frame and text colors, including ones picked from your photo.",
+    caption: "Camera details, date and a note under the photo.",
+    position: "Where the caption sits and how it is aligned.",
+    logo: "Add your signature or logo as a watermark.",
+  };
   // 24×24 stroke icons for the tool tabs.
   const ICONS = {
     looks: "M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z",
@@ -286,6 +305,10 @@
     { id: "carousel3", label: "Carousel × 3", w: 12, h: 5, slices: 3 },
   ];
   const slices = $derived(RATIOS.find((r) => r.id === selectedRatioId)?.slices ?? 1);
+  // In a fixed ratio one border is filled by the ratio itself, so only the other slider is shown.
+  const autoAxis = $derived(
+    processedImage ? autoBorderAxis(processedImage.width, processedImage.height, RATIOS.find((r) => r.id === selectedRatioId)) : null,
+  );
   let selectedRatioId = $state("4:5");
 
   // Colors & Auto-Contrast
@@ -295,6 +318,7 @@
 
   // EXIF Typography & Custom Fonts
   let showExif = $state(true);
+  let cleanNames = $state(true); // "ILCE-7RM4" → "Sony A7R IV" on the frame; the typed text is kept as is
 
   // Bundled fonts (see fonts.js) work offline; "system", "serif" and "mono" use what every device has.
   // Unknown ids from older saved presets fall back to the first entry.
@@ -559,7 +583,7 @@
   // Every frame setting in one plain object: used by templates and by undo/redo.
   const frameSnapshot = () => ({
     customMarginH, customMarginV, captionSpace, selectedRatioId, backgroundColor, textColor, autoContrast,
-    textPosX, textPosY, textAlign, textZone, selectedFontId, autoFontSize, manualFontSize, showExif,
+    textPosX, textPosY, textAlign, textZone, selectedFontId, autoFontSize, manualFontSize, showExif, cleanNames,
     logoScale, logoOpacity, logoPosX, logoPosY, exifDisplay: { ...exifDisplay },
   });
 
@@ -672,6 +696,7 @@
     if (p.autoFontSize !== undefined) autoFontSize = p.autoFontSize;
     if (p.manualFontSize !== undefined) manualFontSize = p.manualFontSize;
     if (p.showExif !== undefined) showExif = p.showExif;
+    if (p.cleanNames !== undefined) cleanNames = p.cleanNames;
     if (p.logoScale !== undefined) logoScale = p.logoScale;
     if (p.logoOpacity !== undefined) logoOpacity = p.logoOpacity;
     if (p.logoPosX !== undefined) logoPosX = p.logoPosX;
@@ -1217,6 +1242,68 @@
     if (files.length > 0) loadFiles(files);
   }
 
+  // A built-in photo for first-time visitors: painted on a canvas so it works offline and adds no download.
+  // Its camera details are raw EXIF codes on purpose, so "Clean metadata names" has something to show.
+  async function loadSamplePhoto() {
+    const W = 2400, H = 3000;
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const g = c.getContext("2d");
+    const sky = g.createLinearGradient(0, 0, 0, H * 0.62);
+    sky.addColorStop(0, "#2b3a78");
+    sky.addColorStop(0.45, "#c9677a");
+    sky.addColorStop(0.8, "#ffb36b");
+    sky.addColorStop(1, "#ffe2a8");
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, H);
+    const sun = g.createRadialGradient(W * 0.62, H * 0.5, 0, W * 0.62, H * 0.5, W * 0.5);
+    sun.addColorStop(0, "rgb(255 246 214 / 1)");
+    sun.addColorStop(0.08, "rgb(255 230 170 / 0.95)");
+    sun.addColorStop(0.3, "rgb(255 170 110 / 0.25)");
+    sun.addColorStop(1, "rgb(255 170 110 / 0)");
+    g.fillStyle = sun;
+    g.fillRect(0, 0, W, H);
+    // Three mountain ridges, lighter with distance.
+    [["#6a4a78", 0.5, 0.06], ["#3e2f5c", 0.56, 0.09], ["#1d1a33", 0.63, 0.12]].forEach(([color, base, amp], k) => {
+      g.fillStyle = color;
+      g.beginPath();
+      g.moveTo(0, H);
+      for (let x = 0; x <= W; x += 20) {
+        const t = x / W;
+        g.lineTo(x, H * (base - amp * (0.6 * Math.sin(t * 7 + k * 2) + 0.4 * Math.sin(t * 19 + k)) * Math.sin(t * Math.PI + k)));
+      }
+      g.lineTo(W, H);
+      g.fill();
+    });
+    // Lake with a broken reflection of the sun.
+    const lake = g.createLinearGradient(0, H * 0.7, 0, H);
+    lake.addColorStop(0, "#3a3060");
+    lake.addColorStop(1, "#0f0e1c");
+    g.fillStyle = lake;
+    g.fillRect(0, H * 0.7, W, H * 0.3);
+    for (let y = H * 0.71; y < H; y += 22) {
+      const w = W * 0.22 * (1 - (y - H * 0.7) / (H * 0.3)) * (0.6 + 0.4 * Math.sin(y * 0.37));
+      g.fillStyle = `rgb(255 214 160 / ${0.5 * (1 - (y - H * 0.7) / (H * 0.3))})`;
+      g.fillRect(W * 0.62 - w / 2, y, w, 7);
+    }
+    const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.92));
+    const file = new File([blob], "minimalframe-sample.jpg", { type: "image/jpeg" });
+    await loadFiles([file]);
+    const item = filesList.findLast((f) => f.name === file.name);
+    if (item) {
+      Object.assign(item.exifOverride, {
+        model: "SONY ILCE-7M3",
+        lens: "FE 24-70mm F2.8 GM",
+        focalLength: "35mm",
+        aperture: "ƒ/5.6",
+        shutterSpeed: "1/250s",
+        iso: "ISO 100",
+        note: "Lake at golden hour",
+      });
+    }
+  }
+
   function onDragOver(e) {
     e.preventDefault();
     isDragging = true;
@@ -1310,11 +1397,11 @@
     const lines = [];
 
     if (display.model && override.model?.trim()) {
-      lines.push({ type: "model", text: override.model.trim() });
+      lines.push({ type: "model", text: cleanNames ? cleanCamera(override.model) : override.model.trim() });
     }
 
     if (display.lens && override.lens?.trim()) {
-      lines.push({ type: "lens", text: override.lens.trim() });
+      lines.push({ type: "lens", text: cleanNames ? cleanLens(override.lens) : override.lens.trim() });
     }
 
     const settings = [];
@@ -1482,6 +1569,7 @@
     const _bg = backgroundColor;
     const _tc = textColor;
     const _se = showExif;
+    const _cn = cleanNames;
     const _ta = textAlign;
     const _tz = textZone;
     const _tx = textPosX;
@@ -1493,12 +1581,7 @@
     const _ov = activeItem?.exifOverride
       ? JSON.stringify(activeItem.exifOverride)
       : "";
-    const _f_m = exifDisplay.model;
-    const _f_l = exifDisplay.lens;
-    const _f_fl = exifDisplay.focalLength;
-    const _f_a = exifDisplay.aperture;
-    const _f_ss = exifDisplay.shutterSpeed;
-    const _f_i = exifDisplay.iso;
+    const _fields = JSON.stringify(exifDisplay); // every caption checkbox, including ones added later (date, note)
     const _limg = logoImage;
     const _lsc = logoScale;
     const _lop = logoOpacity;
@@ -1769,15 +1852,6 @@
   ondragover={onDragOver}
   ondragleave={onDragLeave}
 >
-  <!-- Ambient backdrop: a deep blur of the current photo, so the whole app takes on its colors. -->
-  <div class="ambient" aria-hidden="true">
-    {#if activeItem}
-      {#key activeItem.id}<img src={activeItem.thumbUrl} alt="" />{/key}
-    {:else}
-      <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
-    {/if}
-  </div>
-
   <header class="bar glass">
     <span class="wordmark">MinimalFrame</span>
     {#if activeItem}
@@ -1878,14 +1952,26 @@
             <span class="sample-cap" style:font-family='"Cormorant Garamond"'>Fujifilm X-T5</span>
           </div>
         </div>
-        <h1>Your photos, beautifully framed.</h1>
-        <p class="lead">
-          Pick a frame, set the light and add your camera details. Ready for Instagram in seconds, and nothing leaves your device.
-        </p>
-        <button class="btn accent big" onclick={() => fileInput?.click()} disabled={isLoading}>
-          {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || "Opening…"}{:else}Choose photos{/if}
-        </button>
-        <p class="fine">or drop them anywhere. JPEG, PNG, WebP and RAW from Sony, Canon, Nikon, Fujifilm and more.</p>
+        <p class="eyebrow">For Instagram, VSCO and every feed</p>
+        <h1>Social-media-ready frames, with your EXIF <em>beautifully set.</em></h1>
+        <p class="lead">100% private: zero server uploads. Everything runs entirely in your browser.</p>
+        <ul class="badges" aria-label="Features">
+          <li>🔒 100% Private (Local Processing)</li>
+          <li>⚡ Instant Batch Export</li>
+          <li>📸 RAW &amp; EXIF Support</li>
+          <li>✨ Film Grain &amp; Bloom</li>
+        </ul>
+        <div class="dropzone" class:over={isDragging}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4" /></svg>
+          <p class="dz-title">{isDragging ? "Drop to open" : "Drag & drop one photo or a whole shoot"}</p>
+          <div class="dz-actions">
+            <button class="btn accent big" onclick={() => fileInput?.click()} disabled={isLoading}>
+              {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || "Opening…"}{:else}Choose photos{/if}
+            </button>
+            <button class="btn ghost big" onclick={loadSamplePhoto} disabled={isLoading}>Try sample photo</button>
+          </div>
+          <p class="fine">JPEG, PNG, WebP and RAW from Sony, Canon, Nikon, Fujifilm and more.</p>
+        </div>
       </div>
     {/if}
 
@@ -1936,13 +2022,14 @@
 
       <div class="tabs" class:many={TOOLS[activeTab].length > 4} role="group" aria-label="Tools">
         {#each TOOLS[activeTab] as [id, name] (id)}
-          <button class="tab" aria-pressed={activeTool[activeTab] === id} onclick={() => (activeTool[activeTab] = id)}>
+          <button class="tab" title={TOOL_HINTS[id]} aria-pressed={activeTool[activeTab] === id} onclick={() => (activeTool[activeTab] = id)}>
             {@render icon(id)}<span>{name}</span>
           </button>
         {/each}
       </div>
 
       <div class="body">
+        <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
         {#if activeTab === "editor"}
           {@const tool = activeTool.editor}
           {#if histo}<Histogram bins={histo} />{/if}
@@ -2012,19 +2099,19 @@
             </div>
           {:else if tool === "light"}
             <div class="stack">
-              <Dial id="d-exposure" label="Exposure" bind:value={dev.exposure} min={-3} max={3} step={0.05} unit="EV" reset={0} signed />
-              <Dial id="d-contrast" label="Contrast" bind:value={dev.contrast} min={-100} max={100} reset={0} signed />
-              <Dial id="d-highlights" label="Highlights" bind:value={dev.highlights} min={-100} max={100} reset={0} signed />
-              <Dial id="d-shadows" label="Shadows" bind:value={dev.shadows} min={-100} max={100} reset={0} signed />
-              <Dial id="d-whites" label="Whites" bind:value={dev.whites} min={-100} max={100} reset={0} signed />
-              <Dial id="d-blacks" label="Blacks" bind:value={dev.blacks} min={-100} max={100} reset={0} signed />
+              <Dial id="d-exposure" hint="Overall brightness in camera stops. +1 EV doubles the light." label="Exposure" bind:value={dev.exposure} min={-3} max={3} step={0.05} unit="EV" reset={0} signed />
+              <Dial id="d-contrast" hint="Spreads tones apart: darker darks and brighter brights." label="Contrast" bind:value={dev.contrast} min={-100} max={100} reset={0} signed />
+              <Dial id="d-highlights" hint="Recovers or brightens only the brightest areas, like skies." label="Highlights" bind:value={dev.highlights} min={-100} max={100} reset={0} signed />
+              <Dial id="d-shadows" hint="Lifts or deepens only the darkest areas without touching the rest." label="Shadows" bind:value={dev.shadows} min={-100} max={100} reset={0} signed />
+              <Dial id="d-whites" hint="Sets the white point: how bright the very brightest pixels get." label="Whites" bind:value={dev.whites} min={-100} max={100} reset={0} signed />
+              <Dial id="d-blacks" hint="Sets the black point: how deep the very darkest pixels get." label="Blacks" bind:value={dev.blacks} min={-100} max={100} reset={0} signed />
             </div>
           {:else if tool === "color"}
             <div class="stack">
-              <Dial id="d-temp" label="Temperature" bind:value={dev.temperature} min={-100} max={100} reset={0} signed track="linear-gradient(to right, #5d9bff, #ffbe55)" />
-              <Dial id="d-tint" label="Tint" bind:value={dev.tint} min={-100} max={100} reset={0} signed track="linear-gradient(to right, #53d36b, #e45ce0)" />
-              <Dial id="d-vibrance" label="Vibrance" bind:value={dev.vibrance} min={-100} max={100} reset={0} signed />
-              <Dial id="d-saturation" label="Saturation" bind:value={dev.saturation} min={-100} max={100} reset={0} signed />
+              <Dial id="d-temp" hint="White balance: cooler (blue) to warmer (yellow)." label="Temperature" bind:value={dev.temperature} min={-100} max={100} reset={0} signed track="linear-gradient(to right, #5d9bff, #ffbe55)" />
+              <Dial id="d-tint" hint="Corrects green or magenta casts, e.g. from fluorescent light." label="Tint" bind:value={dev.tint} min={-100} max={100} reset={0} signed track="linear-gradient(to right, #53d36b, #e45ce0)" />
+              <Dial id="d-vibrance" hint="Boosts muted colors more than strong ones, and protects skin tones." label="Vibrance" bind:value={dev.vibrance} min={-100} max={100} reset={0} signed />
+              <Dial id="d-saturation" hint="Intensity of every color equally." label="Saturation" bind:value={dev.saturation} min={-100} max={100} reset={0} signed />
               <p class="hint">Vibrance boosts muted colors and protects skin tones. Saturation moves every color equally.</p>
             </div>
           {:else if tool === "curve"}
@@ -2052,21 +2139,21 @@
                   ></button>
                 {/each}
               </div>
-              <Dial id="d-mix-h" label="{mixerBand[0].toUpperCase() + mixerBand.slice(1)} hue" bind:value={() => mixerValue(0), (v) => setMixer(0, v)} min={-100} max={100} reset={0} signed />
-              <Dial id="d-mix-s" label="Saturation" bind:value={() => mixerValue(1), (v) => setMixer(1, v)} min={-100} max={100} reset={0} signed />
-              <Dial id="d-mix-l" label="Luminance" bind:value={() => mixerValue(2), (v) => setMixer(2, v)} min={-100} max={100} reset={0} signed />
+              <Dial id="d-mix-h" hint="Shifts this color toward its neighbours on the color wheel." label="{mixerBand[0].toUpperCase() + mixerBand.slice(1)} hue" bind:value={() => mixerValue(0), (v) => setMixer(0, v)} min={-100} max={100} reset={0} signed />
+              <Dial id="d-mix-s" hint="How intense this one color is." label="Saturation" bind:value={() => mixerValue(1), (v) => setMixer(1, v)} min={-100} max={100} reset={0} signed />
+              <Dial id="d-mix-l" hint="How bright this one color is." label="Luminance" bind:value={() => mixerValue(2), (v) => setMixer(2, v)} min={-100} max={100} reset={0} signed />
               <p class="hint">Shift one color without touching the rest: warmer greens, deeper blue skies, softer skin.</p>
             </div>
           {:else if tool === "detail"}
             <div class="stack">
-              <Dial id="d-clarity" label="Clarity" bind:value={dev.clarity} min={-100} max={100} reset={0} signed />
-              <Dial id="d-sharpen" label="Sharpen" bind:value={dev.sharpen} unit="%" reset={0} />
+              <Dial id="d-clarity" hint="Midtone contrast: adds punch and texture, or softens." label="Clarity" bind:value={dev.clarity} min={-100} max={100} reset={0} signed />
+              <Dial id="d-sharpen" hint="Crisper fine edges. Best judged at 100% zoom." label="Sharpen" bind:value={dev.sharpen} unit="%" reset={0} />
               <p class="hint">Clarity adds mid-tone punch; negative clarity softens. Sharpen crisps fine detail.</p>
             </div>
           {:else if tool === "film"}
             <div class="stack">
-              <Dial id="d-grain" label="Film grain" bind:value={dev.filmGrain} unit="%" reset={0} />
-              <Dial id="d-bloom" label="Soft bloom" bind:value={dev.softBloom} unit="%" reset={0} />
+              <Dial id="d-grain" hint="Analog film texture over the photo." label="Film grain" bind:value={dev.filmGrain} unit="%" reset={0} />
+              <Dial id="d-bloom" hint="Soft glow around bright areas, like a diffusion filter." label="Soft bloom" bind:value={dev.softBloom} unit="%" reset={0} />
               <p class="hint">Bloom makes highlights glow like a mist filter. The preview is an approximation; full grain and bloom are rendered when you export.</p>
             </div>
           {/if}
@@ -2127,10 +2214,20 @@
             {/if}
           {:else if tool === "border"}
             <div class="stack">
-              <Dial id="d-margin-h" label="Sides" bind:value={customMarginH} min={0} max={40} unit="%" reset={8} />
-              <Dial id="d-margin-v" label="Top and bottom" bind:value={customMarginV} min={0} max={40} unit="%" reset={8} />
+              {#if autoAxis !== "h"}
+                <Dial id="d-margin-h" label={autoAxis ? "Border" : "Sides"} bind:value={customMarginH} min={0} max={40} unit="%" reset={8} />
+              {/if}
+              {#if autoAxis !== "v"}
+                <Dial id="d-margin-v" label={autoAxis ? "Border" : "Top and bottom"} bind:value={customMarginV} min={0} max={40} unit="%" reset={8} />
+              {/if}
+              {#if autoAxis}
+                <p class="hint">
+                  {autoAxis === "v" ? "Top and bottom fill" : "The sides fill"} in by themselves to keep the
+                  {RATIOS.find((r) => r.id === selectedRatioId)?.label} shape. Choose Even border in Ratio to set every side yourself.
+                </p>
+              {/if}
               {#if selectedRatioId === "orig"}
-                <Dial id="d-caption-space" label="Caption space" bind:value={captionSpace} min={0} max={40} unit="%" reset={12} />
+                <Dial id="d-caption-space" hint="Extra frame space reserved for the caption text." label="Caption space" bind:value={captionSpace} min={0} max={40} unit="%" reset={12} />
               {/if}
               <p class="hint">The border under the caption always grows enough to fit it.</p>
             </div>
@@ -2194,6 +2291,11 @@
                 Show camera details
               </label>
               {#if showExif}
+                <label class="switch" title="Turns codes like ILCE-7RM4 or XF35mmF2 into Sony A7R IV and Fujifilm XF 35mm f/2">
+                  <input type="checkbox" role="switch" bind:checked={cleanNames} />
+                  <span class="switch-track" aria-hidden="true"></span>
+                  Clean metadata names
+                </label>
                 {#if activeItem}
                   <div class="fields">
                     {#each EXIF_FIELDS as [key, name, example] (key)}
@@ -2448,6 +2550,13 @@
     /* The accent follows the photo's dominant hue (set inline as --hue). */
     --accent: hsl(var(--hue) 88% 72%);
     --accent-strong: hsl(var(--hue) 90% 80%);
+    --accent-ink: var(--accent);
+    --bg: hsl(var(--hue) 14% 8%);
+    --stage: hsl(var(--hue) 16% 6%);
+    --surface: hsl(var(--hue) 10% 11%);
+    --glass: var(--surface);
+    --glass-line: hsl(var(--hue) 30% 80% / 0.1);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -16px rgb(0 0 0 / 0.6);
     position: relative;
     height: 100dvh;
     display: grid;
@@ -2457,79 +2566,56 @@
       "bar bar"
       "stage panel"
       "strip panel";
-    gap: 14px;
-    padding: 14px;
-    padding-top: max(14px, env(safe-area-inset-top));
-    padding-bottom: max(14px, env(safe-area-inset-bottom));
+    gap: 10px;
+    padding: 10px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    background:
+      radial-gradient(70% 60% at 40% 45%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 70%),
+      var(--stage);
+  }
+  @media (prefers-color-scheme: light) {
+    .app {
+      --accent: hsl(var(--hue) 80% 66%);
+      --accent-strong: hsl(var(--hue) 80% 72%);
+      --accent-ink: hsl(var(--hue) 70% 34%);
+      --bg: hsl(var(--hue) 30% 96%);
+      --stage: hsl(var(--hue) 24% 92%);
+      --surface: hsl(var(--hue) 45% 99.5%);
+      --glass-line: hsl(var(--hue) 25% 25% / 0.1);
+      --shadow: 0 1px 2px hsl(var(--hue) 30% 20% / 0.06), 0 12px 32px -18px hsl(var(--hue) 30% 20% / 0.25);
+    }
   }
   .app.empty {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "bar" "stage";
+    background:
+      radial-gradient(50% 45% at 50% 30%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%),
+      var(--bg);
   }
   .app > :is(.bar, .stage, .strip, .panel) {
     position: relative;
     z-index: 1;
   }
   .app.dragging .stage {
-    outline: 2px dashed var(--accent);
-    outline-offset: -6px;
+    outline: 2px dashed var(--accent-ink);
+    outline-offset: -10px;
     border-radius: var(--radius);
   }
+  .app > :is(.bar, .panel, .strip) {
+    box-shadow: var(--shadow);
+  }
 
-  /* ── Ambient backdrop ──────────────────────────────────────────────────── */
-  .ambient {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    overflow: hidden;
-    background: #0c0c10;
-  }
-  .ambient img {
-    position: absolute;
-    inset: -12%;
-    width: 124%;
-    height: 124%;
-    object-fit: cover;
-    filter: blur(64px) saturate(1.5) brightness(0.62);
-    animation: fade-in 900ms ease-out;
-  }
-  .ambient::after {
-    /* gentle vignette so glass panels keep their contrast at the edges */
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(120% 90% at 50% 40%, transparent 40%, rgb(0 0 0 / 0.45));
-  }
-  .blob {
-    position: absolute;
-    width: 60vmax;
-    height: 60vmax;
-    border-radius: 50%;
-    filter: blur(80px);
-    opacity: 0.55;
-    animation: drift 28s ease-in-out infinite alternate;
-  }
-  .b1 { background: #ff8a5c; top: -20vmax; left: -15vmax; }
-  .b2 { background: #6a7dff; bottom: -25vmax; right: -15vmax; animation-delay: -9s; }
-  .b3 { background: #2fc6a0; top: 30%; left: 35%; width: 40vmax; height: 40vmax; opacity: 0.35; animation-delay: -17s; }
-  @keyframes drift {
-    to { transform: translate(8vmax, -6vmax) scale(1.15); }
-  }
   @keyframes fade-in {
     from { opacity: 0; }
   }
 
   /* ── Glass ─────────────────────────────────────────────────────────────── */
   .glass {
-    background: var(--glass);
-    -webkit-backdrop-filter: blur(28px) saturate(1.5);
-    backdrop-filter: blur(28px) saturate(1.5);
+    background: var(--surface);
     border: 1px solid var(--glass-line);
     border-radius: var(--radius);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.07),
-      0 18px 50px -20px rgb(0 0 0 / 0.55);
   }
 
   /* ── Top bar ───────────────────────────────────────────────────────────── */
@@ -2577,7 +2663,7 @@
     font-size: 0.72rem;
     font-weight: 650;
     letter-spacing: 0.04em;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
   .bar-export {
     margin-left: auto;
@@ -2614,11 +2700,11 @@
   }
   .btn.ghost {
     border: 1px solid var(--glass-line);
-    background: rgb(255 255 255 / 0.06);
+    background: color-mix(in srgb, var(--text) 6%, transparent);
     color: var(--text);
   }
   .btn.ghost:hover:not(:disabled) {
-    background: rgb(255 255 255 / 0.12);
+    background: color-mix(in srgb, var(--text) 12%, transparent);
   }
   .btn.big {
     padding: 15px 26px;
@@ -2693,27 +2779,28 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 18px;
-    padding: 24px;
+    justify-content: safe center;
+    gap: 16px;
+    padding: 24px 16px;
     text-align: center;
     overflow: auto;
   }
   .fan {
     position: relative;
-    width: 420px;
+    flex: none;
+    width: 360px;
     max-width: 90vw;
-    height: 230px;
-    margin-bottom: 18px;
+    height: 180px;
+    margin-bottom: 4px;
   }
   .sample {
     position: absolute;
     top: 0;
     left: 50%;
-    width: 150px;
+    width: 124px;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 24px 50px -18px rgb(0 0 0 / 0.7);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 18px 36px -16px rgb(0 0 0 / 0.4);
     transition: transform 300ms cubic-bezier(0.2, 0.7, 0.2, 1);
   }
   .sample-photo {
@@ -2764,13 +2851,19 @@
   .p-sunset { background: linear-gradient(170deg, #ffb26b 0%, #ff7a7a 45%, #4a3a6b 100%); }
   .p-sea { background: linear-gradient(180deg, #9fd3ff 0%, #4f8fc0 50%, #1d3d5c 100%); }
   .p-forest { background: linear-gradient(160deg, #cfe8a0 0%, #5f9a5a 50%, #23402c 100%); }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(90deg, var(--accent-ink), hsl(calc(var(--hue) - 30) 80% 60%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
   .hero h1 {
-    font-stretch: 112%;
-    font-weight: 750;
-    font-size: clamp(2rem, 4.6vw, 3.4rem);
-    line-height: 1.04;
-    letter-spacing: -0.03em;
-    max-width: 16ch;
+    font-weight: 700;
+    font-size: clamp(1.9rem, 4vw, 2.8rem);
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    max-width: 20ch;
     text-wrap: balance;
   }
   .lead {
@@ -2784,6 +2877,84 @@
     max-width: 52ch;
     font-size: 0.85rem;
     color: var(--muted);
+  }
+  .eyebrow {
+    font-size: 0.78rem;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+  }
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    max-width: 640px;
+    padding: 0;
+    list-style: none;
+  }
+  .badges li {
+    padding: 7px 13px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    font-size: 0.85rem;
+    font-weight: 550;
+    white-space: nowrap;
+  }
+  .dropzone {
+    flex: none;
+    display: grid;
+    justify-items: center;
+    gap: 12px;
+    width: min(560px, 100%);
+    margin-top: 8px;
+    padding: 26px 20px 20px;
+    border: 1.5px dashed color-mix(in srgb, var(--text) 22%, transparent);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    transition: border-color 150ms, background 150ms, transform 150ms;
+  }
+  .dropzone.over {
+    border-color: var(--accent-ink);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    transform: scale(1.01);
+  }
+  .dropzone > svg {
+    width: 30px;
+    height: 30px;
+    color: var(--accent-ink);
+  }
+  .dz-title {
+    font-weight: 600;
+  }
+  .dz-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+  /* Keep the dropzone above the fold: shrink the fan on short screens, drop it on phones. */
+  @media (max-width: 600px) {
+    .fan {
+      display: none;
+    }
+    .hero {
+      gap: 12px;
+    }
+    .badges li {
+      padding: 5px 10px;
+      font-size: 0.76rem;
+    }
+    .dropzone {
+      padding: 18px 14px 14px;
+    }
+    .dropzone .btn.big {
+      padding: 12px 20px;
+      font-size: 0.98rem;
+    }
   }
 
   .toast,
@@ -2804,7 +2975,7 @@
   }
   .alert {
     top: 12px;
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
   }
   .alert button {
     font-size: 1.2rem;
@@ -2814,7 +2985,7 @@
   .spinner {
     width: 18px;
     height: 18px;
-    border: 2px solid rgb(255 255 255 / 0.25);
+    border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
     border-top-color: currentColor;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -2865,7 +3036,7 @@
     transition: outline-color 150ms;
   }
   .frame.active .frame-pick {
-    outline-color: var(--accent);
+    outline-color: var(--accent-ink);
   }
   .frame-pick img {
     display: block;
@@ -2891,7 +3062,7 @@
   .frame-sel input {
     width: 15px;
     height: 15px;
-    accent-color: var(--accent);
+    accent-color: var(--accent-ink);
   }
   .frame-del,
   .mini-del {
@@ -2920,7 +3091,7 @@
     width: 56px;
     height: 56px;
     border-radius: 10px;
-    border: 1px dashed rgb(255 255 255 / 0.35);
+    border: 1px dashed color-mix(in srgb, var(--text) 35%, transparent);
     font-size: 1.5rem;
     color: var(--muted);
   }
@@ -2942,7 +3113,7 @@
     padding: 3px;
     gap: 2px;
     border-radius: 999px;
-    background: rgb(0 0 0 / 0.25);
+    background: var(--field);
     border: 1px solid var(--glass-line);
   }
   .seg button {
@@ -2957,8 +3128,8 @@
     color: var(--text);
   }
   .seg button[aria-pressed="true"] {
-    background: rgb(255 255 255 / 0.92);
-    color: #111;
+    background: var(--text);
+    color: var(--surface);
   }
   .seg.wrap {
     display: flex;
@@ -2970,11 +3141,11 @@
   }
   .seg.wrap button {
     border: 1px solid var(--glass-line);
-    background: rgb(255 255 255 / 0.05);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
   }
   .seg.wrap button[aria-pressed="true"] {
-    background: rgb(255 255 255 / 0.92);
-    color: #111;
+    background: var(--text);
+    color: var(--surface);
   }
   .modes {
     display: grid;
@@ -3011,11 +3182,17 @@
   }
   .tab:hover {
     color: var(--text);
-    background: rgb(255 255 255 / 0.06);
+    background: color-mix(in srgb, var(--text) 6%, transparent);
   }
   .tab[aria-pressed="true"] {
-    color: var(--accent);
-    background: rgb(255 255 255 / 0.1);
+    color: var(--accent-ink);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+  .tool-hint {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    color: var(--muted);
   }
 
   .body {
@@ -3044,7 +3221,7 @@
     color: var(--muted);
   }
   .hint.warn {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   /* Looks */
@@ -3072,7 +3249,7 @@
     color: var(--text);
   }
   .look[aria-pressed="true"] img {
-    outline-color: var(--accent);
+    outline-color: var(--accent-ink);
   }
 
   /* Templates */
@@ -3132,7 +3309,7 @@
     gap: 12px;
     padding: 12px;
     border-radius: 14px;
-    background: rgb(255 255 255 / 0.05);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
     border: 1px solid transparent;
     font-size: 0.88rem;
     text-align: left;
@@ -3148,11 +3325,11 @@
     border-style: dashed;
   }
   .ratio[aria-pressed="true"] {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     color: var(--text);
   }
   .ratio[aria-pressed="true"] .ratio-glyph {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   /* Colors */
@@ -3166,12 +3343,12 @@
     width: 38px;
     height: 38px;
     border-radius: 50%;
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 25%, transparent);
     display: grid;
     place-items: center;
   }
   .swatch[aria-pressed="true"] {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-ink);
     outline-offset: 3px;
   }
   .swatch-custom {
@@ -3227,7 +3404,7 @@
     width: 44px;
     height: 26px;
     border-radius: 999px;
-    background: rgb(255 255 255 / 0.18);
+    background: color-mix(in srgb, var(--text) 18%, transparent);
     position: relative;
     transition: background 150ms;
   }
@@ -3250,7 +3427,7 @@
     translate: 18px 0;
   }
   .switch input:focus-visible + .switch-track {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-ink);
     outline-offset: 2px;
   }
 
@@ -3276,19 +3453,19 @@
   .field-check input {
     width: 16px;
     height: 16px;
-    accent-color: var(--accent);
+    accent-color: var(--accent-ink);
   }
   .text {
     width: 100%;
     min-width: 0;
     padding: 10px 12px;
-    background: rgb(0 0 0 / 0.25);
+    background: var(--field);
     border: 1px solid var(--glass-line);
     border-radius: 12px;
     font-size: 0.92rem;
   }
   .text:focus {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
     outline: none;
   }
   .text:disabled {
@@ -3305,7 +3482,7 @@
     gap: 2px;
     padding: 10px 4px 8px;
     border-radius: 14px;
-    background: rgb(255 255 255 / 0.05);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
     border: 1px solid transparent;
     min-width: 0;
   }
@@ -3322,7 +3499,7 @@
     white-space: nowrap;
   }
   .font[aria-pressed="true"] {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
   }
   .font-more {
     display: grid;
@@ -3344,7 +3521,7 @@
     object-fit: contain;
     padding: 6px;
     border-radius: 12px;
-    background: rgb(255 255 255 / 0.12);
+    background: color-mix(in srgb, var(--text) 12%, transparent);
   }
   .logo-name {
     flex: 1;
@@ -3358,13 +3535,13 @@
     display: grid;
     gap: 6px;
     padding: 22px 18px;
-    border: 1px dashed rgb(255 255 255 / 0.35);
+    border: 1px dashed color-mix(in srgb, var(--text) 35%, transparent);
     border-radius: 16px;
     cursor: pointer;
   }
   .upload:hover,
   .upload:focus-within {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
   }
   .upload-title {
     font-weight: 650;
@@ -3411,7 +3588,7 @@
     height: 36px;
     border-radius: 50%;
     font-size: 1.3rem;
-    background: rgb(255 255 255 / 0.08);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
   }
   fieldset {
     border: 0;
@@ -3426,7 +3603,7 @@
     gap: 2px;
     padding: 12px 8px;
     border-radius: 14px;
-    background: rgb(255 255 255 / 0.05);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
     border: 1px solid transparent;
     text-align: center;
     cursor: pointer;
@@ -3441,10 +3618,10 @@
     font-variant-numeric: tabular-nums;
   }
   .size.on {
-    border-color: var(--accent);
+    border-color: var(--accent-ink);
   }
   .size:focus-within {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-ink);
     outline-offset: 2px;
   }
   .two {
@@ -3463,7 +3640,7 @@
     font-size: 0.92rem;
   }
   .fallback {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-size: 0.92rem;
     text-underline-offset: 3px;
   }
@@ -3474,7 +3651,7 @@
   .progress-track {
     height: 6px;
     border-radius: 3px;
-    background: rgb(255 255 255 / 0.15);
+    background: color-mix(in srgb, var(--text) 15%, transparent);
     overflow: hidden;
   }
   .progress-track div {
@@ -3523,10 +3700,10 @@
   }
   .icon-btn:hover:not(:disabled),
   .icon-btn.on {
-    background: rgb(255 255 255 / 0.12);
+    background: color-mix(in srgb, var(--text) 12%, transparent);
   }
   .icon-btn.on {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   /* ── Overlays on the photo ─────────────────────────────────────────────── */
@@ -3561,7 +3738,7 @@
     touch-action: none;
   }
   .crop-box:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-ink);
   }
   .third {
     position: absolute;
@@ -3646,10 +3823,10 @@
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: auto minmax(0, 1fr) auto auto;
       grid-template-areas: "bar" "stage" "strip" "panel";
-      gap: 10px;
-      padding: 10px;
-      padding-top: max(10px, env(safe-area-inset-top));
-      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      gap: 8px;
+      padding: 8px;
+      padding-top: max(8px, env(safe-area-inset-top));
+      padding-bottom: max(8px, env(safe-area-inset-bottom));
     }
     .bar {
       min-height: 48px;
@@ -3658,6 +3835,9 @@
     /* Room for undo / redo / compare / export on a phone-width bar. */
     .meta {
       display: none;
+    }
+    .bar-tools {
+      margin-left: auto;
     }
     .wordmark {
       font-size: 0.95rem;
@@ -3715,10 +3895,6 @@
       width: 100%;
       max-width: none;
       border-radius: var(--radius) var(--radius) 0 0;
-    }
-    .fan {
-      height: 190px;
-      transform: scale(0.85);
     }
   }
 </style>
