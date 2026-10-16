@@ -12,22 +12,74 @@
     processRawFile,
     getRawFormatInfo,
     getRawOrientation,
+    decodeRawLinear,
   } from "./lib/rawEngine.js";
   import { applyAnalogEffects } from "./lib/effectsEngine.js";
+  import Dial from "./lib/Dial.svelte";
+  import { computeFrameLayout } from "./lib/frameLayout.js";
+  import Histogram from "./lib/Histogram.svelte";
+  import {
+    DEV_DEFAULTS,
+    isDevelopSupported,
+    develop,
+    downscaleLinear,
+    cssFilterFor,
+    histogram,
+  } from "./lib/developEngine.js";
 
   // ─── Mode Navigation ───────────────────────────────────────────────────────
   // 'editor' = Color & Light Adjustments | 'framing' = Frame & EXIF Typography
   let activeTab = $state("framing");
 
+  // One tool panel open at a time per mode, like a camera's quick menu.
+  const TOOLS = {
+    editor: [["looks", "Looks"], ["light", "Light"], ["color", "Color"], ["film", "Film"]],
+    framing: [
+      ["templates", "Templates"], ["ratio", "Ratio"], ["border", "Border"], ["colors", "Colors"],
+      ["caption", "Caption"], ["position", "Position"], ["logo", "Logo"],
+    ],
+  };
+  let activeTool = $state({ editor: "looks", framing: "ratio" });
+  // 24×24 stroke icons for the tool tabs.
+  const ICONS = {
+    looks: "M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z",
+    light: "M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
+    color: "M12 3s6 6.4 6 11a6 6 0 01-12 0c0-4.6 6-11 6-11z",
+    film: "M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4",
+    templates: "M4 4h16v16H4zM4 10h16M10 10v10",
+    ratio: "M6 2v14a2 2 0 002 2h14M2 6h14a2 2 0 012 2v14",
+    border: "M3 3h18v18H3zM7 7h10v10H7z",
+    colors: "M12 3a9 9 0 100 18c1.1 0 1.6-.8 1.6-1.6 0-.9-.7-1.3-.7-2.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 004-4C21 6.8 17 3 12 3zM7.5 12h.01M9.5 7.5h.01M14.5 7.5h.01",
+    caption: "M5 7V5h14v2M12 5v14M9 19h6",
+    position: "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
+    logo: "M12 7a5 5 0 100 10 5 5 0 000-10zM12 2a10 10 0 100 20 10 10 0 000-20z",
+    export: "M12 3v12M7 10l5 5 5-5M5 21h14",
+  };
+  let exportDialog = $state.raw(null);
+  let fileInput = $state.raw(null);
+  let canvasAspect = $state(4 / 5); // preview box ratio; updated whenever the canvas is resized
+
+  const EXIF_FIELDS = [
+    ["model", "Camera", "Sony A7 IV"],
+    ["lens", "Lens", "FE 35mm F1.8"],
+    ["focalLength", "Focal length", "35mm"],
+    ["aperture", "Aperture", "ƒ/1.8"],
+    ["shutterSpeed", "Shutter", "1/250s"],
+    ["iso", "ISO", "ISO 100"],
+  ];
+  const QUICK_BACKGROUNDS = ["#ffffff", "#f1eee8", "#7d7d7a", "#000000"];
+
   // ─── Batch / Multi-File State Management ───────────────────────────────────
   // Each item in filesList contains:
-  // { id, file, name, baseImage, thumbUrl, isRaw, rawBadge, orientationTag, exifOverride }
+  // { id, file, name, sourceBlob, fullW, fullH, previewImage, linearRaw, thumbUrl, isRaw, rawBadge, orientationTag, exifOverride }
   let filesList = $state([]);
   let activeImageIndex = $state(0);
   let isLoading = $state(false);
   let loadingStatus = $state("");
   let loadError = $state("");
   let isDragging = $state(false);
+
+  const selectedCount = $derived(filesList.filter((f) => f.selected).length);
 
   // Active Item Helper
   const activeItem = $derived(
@@ -40,75 +92,68 @@
   let processedImage = $state.raw(null);
 
   // ─── Mode 1: Photo Editor State (Color, Light & Analog Effects) ─────────────
-  let exposure = $state(0); // -2.0 to +2.0 EV
-  let brightness = $state(0); // -100 to +100 %
-  let contrast = $state(0); // -100 to +100 %
-  let saturation = $state(0); // -100 to +100 %
-  let filmGrain = $state(0); // 0 to 100 %
-  let softBloom = $state(0); // 0 to 100 %
+  // All develop settings live in one object (see DEV_DEFAULTS) so looks, presets and reset stay one-liners.
+  let dev = $state({ ...DEV_DEFAULTS });
+  const canDevelop = isDevelopSupported();
 
   function resetColorAdjustments() {
-    exposure = 0;
-    brightness = 0;
-    contrast = 0;
-    saturation = 0;
-    filmGrain = 0;
-    softBloom = 0;
+    Object.assign(dev, DEV_DEFAULTS);
   }
 
-  function applyPresetLook(preset) {
-    if (preset === "raw-fix") {
-      exposure = 0.25;
-      brightness = 5;
-      contrast = 18;
-      saturation = 14;
-      filmGrain = 0;
-      softBloom = 0;
-    } else if (preset === "vivid") {
-      exposure = 0.1;
-      brightness = 0;
-      contrast = 20;
-      saturation = 35;
-      filmGrain = 0;
-      softBloom = 0;
-    } else if (preset === "bw-contrast") {
-      exposure = 0.05;
-      brightness = 0;
-      contrast = 35;
-      saturation = -100;
-      filmGrain = 20;
-      softBloom = 0;
-    } else if (preset === "warm") {
-      exposure = 0.15;
-      brightness = 6;
-      contrast = 12;
-      saturation = 22;
-      filmGrain = 10;
-      softBloom = 15;
-    } else if (preset === "moody") {
-      exposure = -0.3;
-      brightness = -5;
-      contrast = 25;
-      saturation = -15;
-      filmGrain = 25;
-      softBloom = 30;
+  const look = (id, name, params) => ({ id, name, params: { ...DEV_DEFAULTS, ...params } });
+  const LOOKS = [
+    look("none", "Original", {}),
+    look("raw-fix", "RAW lift", { exposure: 0.25, contrast: 15, highlights: -20, shadows: 25, vibrance: 20 }),
+    look("vivid", "Vivid", { contrast: 20, whites: 10, vibrance: 35, saturation: 10 }),
+    look("warm", "Golden", { exposure: 0.15, temperature: 35, tint: 8, shadows: 15, vibrance: 20, filmGrain: 10, softBloom: 15 }),
+    look("blue", "Blue hour", { temperature: -35, tint: -5, contrast: 15, highlights: -20, shadows: 10, vibrance: 10 }),
+    look("soft", "Soft film", { exposure: 0.1, contrast: -10, highlights: -25, shadows: 20, temperature: 12, tint: 6, vibrance: -10, filmGrain: 18, softBloom: 10 }),
+    look("fade", "Fade", { contrast: -20, blacks: 30, temperature: 8, saturation: -15, filmGrain: 15 }),
+    look("moody", "Moody", { exposure: -0.3, contrast: 25, highlights: -30, blacks: -15, temperature: -15, saturation: -20, filmGrain: 25, softBloom: 30 }),
+    look("bw-contrast", "Silver", { contrast: 35, whites: 10, blacks: -10, saturation: -100, filmGrain: 20 }),
+  ];
+
+  const applyLook = (l) => Object.assign(dev, l.params);
+  const isLookActive = (l) => Object.keys(DEV_DEFAULTS).every((k) => l.params[k] === dev[k]);
+
+  // Look thumbnails rendered by the real develop engine from the active photo, so they match the result.
+  let lookThumbs = $state({});
+  $effect(() => {
+    const src = activeItem?.previewImage;
+    if (!src || !canDevelop) {
+      lookThumbs = {};
+      return;
     }
-  }
+    let small;
+    if (src.linear) {
+      small = downscaleLinear(src, 160);
+    } else {
+      small = document.createElement("canvas");
+      const k = 160 / Math.max(src.width, src.height);
+      small.width = Math.max(1, Math.round(src.width * k));
+      small.height = Math.max(1, Math.round(src.height * k));
+      small.getContext("2d").drawImage(src, 0, 0, small.width, small.height);
+    }
+    const out = document.createElement("canvas");
+    lookThumbs = Object.fromEntries(
+      LOOKS.map((l) => [l.id, develop(small, l.params, out).toDataURL("image/jpeg", 0.8)]),
+    );
+  });
 
   // ─── Mode 2: Frame & EXIF State ────────────────────────────────────────────
   let customMarginH = $state(8); // Horizontal margin % (5 - 50%)
   let customMarginV = $state(8); // Vertical margin % (5 - 50%)
 
   const RATIOS = [
-    { id: "orig", label: "Original Frame", w: null, h: null },
-    { id: "1:1", label: "1:1 Square", w: 1, h: 1 },
-    { id: "4:5", label: "4:5 Instagram", w: 4, h: 5 },
-    { id: "9:16", label: "9:16 Story", w: 9, h: 16 },
-    { id: "16:9", label: "16:9 Landscape", w: 16, h: 9 },
-    { id: "3:2", label: "3:2 Print", w: 3, h: 2 },
-    { id: "custom", label: "Custom Manual", w: null, h: null },
+    { id: "4:5", label: "Feed portrait", w: 4, h: 5 },
+    { id: "1:1", label: "Feed square", w: 1, h: 1 },
+    { id: "9:16", label: "Story & Reel", w: 9, h: 16 },
+    { id: "orig", label: "Photo + caption", w: null, h: null },
+    { id: "custom", label: "Even border", w: null, h: null },
+    { id: "3:2", label: "Print 3:2", w: 3, h: 2 },
+    { id: "16:9", label: "Wide 16:9", w: 16, h: 9 },
   ];
-  let selectedRatioId = $state("orig");
+  let selectedRatioId = $state("4:5");
 
   // Colors & Auto-Contrast
   let backgroundColor = $state("#ffffff");
@@ -118,45 +163,77 @@
   // EXIF Typography & Custom Fonts
   let showExif = $state(true);
 
+  // Bundled fonts (see fonts.js) work offline; "system", "serif" and "mono" use what every device has.
+  // Unknown ids from older saved presets fall back to the first entry.
   const SYSTEM_FONTS = [
-    {
-      id: "system",
-      label: "System UI",
-      css: "system-ui, -apple-system, sans-serif",
-    },
-    { id: "inter", label: "Inter", css: '"Inter", system-ui, sans-serif' },
-    { id: "sans", label: "Sans-Serif", css: "sans-serif" },
-    {
-      id: "serif",
-      label: "Serif (Editorial)",
-      css: 'Georgia, Cambria, "Times New Roman", serif',
-    },
-    {
-      id: "mono",
-      label: "Monospace (Modern)",
-      css: '"JetBrains Mono", Consolas, monospace',
-    },
-    {
-      id: "impact",
-      label: "Impact (Poster)",
-      css: 'Impact, "Arial Black", sans-serif',
-    },
-    {
-      id: "courier",
-      label: "Courier New",
-      css: '"Courier New", Courier, monospace',
-    },
-    {
-      id: "playfair",
-      label: "Classic Editorial",
-      css: '"Playfair Display", Georgia, serif',
-    },
+    { id: "archivo", label: "Archivo", css: '"Archivo Variable", system-ui, sans-serif' },
+    { id: "montserrat", label: "Montserrat", css: '"Montserrat", sans-serif' },
+    { id: "bebas", label: "Bebas Neue", css: '"Bebas Neue", sans-serif' },
+    { id: "dmserif", label: "DM Serif", css: '"DM Serif Display", serif' },
+    { id: "playfair", label: "Playfair", css: '"Playfair Display", serif' },
+    { id: "cormorant", label: "Cormorant", css: '"Cormorant Garamond", serif' },
+    { id: "spacemono", label: "Space Mono", css: '"Space Mono", monospace' },
+    { id: "caveat", label: "Caveat", css: '"Caveat", cursive' },
+    { id: "system", label: "System", css: "system-ui, -apple-system, sans-serif" },
+    { id: "serif", label: "Serif", css: 'Georgia, "Noto Serif", serif' },
+    { id: "mono", label: "Typewriter", css: '"Courier New", "Droid Sans Mono", monospace' },
   ];
-  let selectedFontId = $state("inter");
+
+  // Fonts the user adds: installed ones (Chrome/Edge desktop) or uploaded files (every platform).
+  // shortcut: uploaded fonts last for this session only; persist them in IndexedDB if people ask.
+  let customFonts = $state([]);
+  const allFonts = $derived([...customFonts, ...SYSTEM_FONTS]);
+  const canBrowseLocalFonts = typeof window !== "undefined" && "queryLocalFonts" in window;
+  let localFamilies = $state([]);
+  let fontError = $state("");
+
+  function addFont(id, label, css) {
+    if (!customFonts.some((f) => f.id === id)) customFonts = [{ id, label, css }, ...customFonts];
+    selectedFontId = id;
+  }
+
+  async function browseLocalFonts() {
+    fontError = "";
+    try {
+      const fonts = await window.queryLocalFonts();
+      localFamilies = [...new Set(fonts.map((f) => f.family))].sort((a, b) => a.localeCompare(b));
+    } catch (err) {
+      fontError = "Font access was blocked. Allow it in the browser's site settings, or upload a font file instead.";
+      console.warn("[MinimalFrame] queryLocalFonts:", err);
+    }
+  }
+
+  function useLocalFont(family) {
+    if (family && localFamilies.includes(family)) addFont(`local:${family}`, family, `"${family}"`);
+  }
+
+  async function onFontFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    fontError = "";
+    const family = file.name.replace(/\.[^.]+$/, "");
+    try {
+      const face = new FontFace(`mf-${family}`, await file.arrayBuffer());
+      document.fonts.add(await face.load());
+      addFont(`file:${family}`, family, `"mf-${family}"`);
+    } catch {
+      fontError = `${file.name} is not a font this browser can read. Use a .ttf, .otf, .woff or .woff2 file.`;
+    }
+  }
+
+  // Canvas text can't swap fonts once they arrive, so load the chosen one and redraw.
+  $effect(() => {
+    const css = (allFonts.find((f) => f.id === selectedFontId) || SYSTEM_FONTS[0]).css;
+    Promise.all([document.fonts.load(`400 40px ${css}`), document.fonts.load(`600 40px ${css}`)]).then(() =>
+      scheduleRender(),
+    );
+  });
+  let selectedFontId = $state("archivo");
 
   // Font Size: Dynamic vs Manual Override
   let autoFontSize = $state(true);
-  let manualFontSize = $state(42);
+  let manualFontSize = $state(24); // px at a 1080px long edge, scaled with the photo
 
   // Checkboxes for which properties to display
   let exifDisplay = $state({
@@ -171,12 +248,9 @@
   // Text placement: alignment, margin zone & free positioning
   let textAlign = $state("left"); // 'left' | 'center' | 'right'
   let textZone = $state("bottom"); // 'bottom' | 'top' margin zone
-  let textPosX = $state(8); // Horizontal % (0 - 100)
-  let textPosY = $state(93); // Vertical % constrained to margin
-
-  // Dynamic slider bounds based on imageRect (zero overlap)
-  let ySliderMin = $state(86);
-  let ySliderMax = $state(98);
+  let textPosX = $state(0); // across the photo's width: 0 = its left edge, 100 = its right edge
+  let textPosY = $state(50); // inside the caption border: 0 = next to the photo, 100 = at the outer edge
+  let captionSpace = $state(12); // "Photo + caption" ratio: extra border for the caption, % of photo height
 
   // Palettes
   const LS_KEY = "mf_palettes_v1";
@@ -275,103 +349,32 @@
   let showSavePresetModal = $state(false);
   let newPresetName = $state("");
 
+  // Built-in frame templates. Develop settings (grain, bloom) are only set where they define the style.
+  const tpl = (id, name, fields) => ({
+    id: `preset_${id}`,
+    name,
+    customMarginH: 8,
+    customMarginV: 8,
+    captionSpace: 12,
+    autoContrast: true,
+    textZone: "bottom",
+    textPosY: 50,
+    autoFontSize: true,
+    showExif: true,
+    ...fields,
+    textPosX: { left: 0, center: 50, right: 100 }[fields.textAlign ?? "left"],
+  });
   const BUILTIN_PRESETS = [
-    {
-      id: "preset_minimal_white",
-      name: "Minimal Gallery",
-      customMarginH: 8,
-      customMarginV: 8,
-      selectedRatioId: "orig",
-      backgroundColor: "#ffffff",
-      textColor: "#111111",
-      autoContrast: true,
-      textAlign: "left",
-      textZone: "bottom",
-      textPosX: 8,
-      textPosY: 93,
-      selectedFontId: "inter",
-      autoFontSize: true,
-      manualFontSize: 42,
-      showExif: true,
-      filmGrain: 0,
-      softBloom: 0,
-      logoScale: 12,
-      logoOpacity: 85,
-      logoPosX: 92,
-      logoPosY: 93,
-    },
-    {
-      id: "preset_editorial_dark",
-      name: "Editorial Dark",
-      customMarginH: 10,
-      customMarginV: 10,
-      selectedRatioId: "4:5",
-      backgroundColor: "#121212",
-      textColor: "#f0f0f5",
-      autoContrast: true,
-      textAlign: "center",
-      textZone: "bottom",
-      textPosX: 50,
-      textPosY: 93,
-      selectedFontId: "serif",
-      autoFontSize: true,
-      manualFontSize: 42,
-      showExif: true,
-      filmGrain: 15,
-      softBloom: 20,
-      logoScale: 10,
-      logoOpacity: 70,
-      logoPosX: 50,
-      logoPosY: 7,
-    },
-    {
-      id: "preset_square_exhibition",
-      name: "Square Exhibition",
-      customMarginH: 12,
-      customMarginV: 12,
-      selectedRatioId: "1:1",
-      backgroundColor: "#f7f6f2",
-      textColor: "#222222",
-      autoContrast: true,
-      textAlign: "center",
-      textZone: "bottom",
-      textPosX: 50,
-      textPosY: 92,
-      selectedFontId: "playfair",
-      autoFontSize: true,
-      manualFontSize: 46,
-      showExif: true,
-      filmGrain: 0,
-      softBloom: 0,
-      logoScale: 12,
-      logoOpacity: 85,
-      logoPosX: 90,
-      logoPosY: 92,
-    },
-    {
-      id: "preset_analog_cine",
-      name: "Analog Cine 16:9",
-      customMarginH: 6,
-      customMarginV: 6,
-      selectedRatioId: "16:9",
-      backgroundColor: "#0a0a0c",
-      textColor: "#e0e0ea",
-      autoContrast: true,
-      textAlign: "right",
-      textZone: "bottom",
-      textPosX: 92,
-      textPosY: 94,
-      selectedFontId: "mono",
-      autoFontSize: true,
-      manualFontSize: 38,
-      showExif: true,
-      filmGrain: 30,
-      softBloom: 35,
-      logoScale: 10,
-      logoOpacity: 75,
-      logoPosX: 8,
-      logoPosY: 94,
-    },
+    tpl("gallery", "Gallery", { selectedRatioId: "orig", customMarginH: 6, customMarginV: 6, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left" }),
+    tpl("polaroid", "Instant", { selectedRatioId: "orig", customMarginH: 5, customMarginV: 5, captionSpace: 24, backgroundColor: "#fbfaf6", selectedFontId: "caveat", textAlign: "center", autoFontSize: false, manualFontSize: 40 }),
+    tpl("museum", "Museum mat", { selectedRatioId: "4:5", customMarginH: 16, customMarginV: 16, backgroundColor: "#f2efe8", selectedFontId: "cormorant", textAlign: "center" }),
+    tpl("square", "Feed square", { selectedRatioId: "1:1", customMarginH: 7, customMarginV: 7, backgroundColor: "#ffffff", selectedFontId: "montserrat", textAlign: "center" }),
+    tpl("midnight", "Midnight", { selectedRatioId: "4:5", backgroundColor: "#0d0f12", selectedFontId: "montserrat", textAlign: "left" }),
+    tpl("editorial", "Editorial", { selectedRatioId: "4:5", customMarginH: 10, customMarginV: 10, backgroundColor: "#141414", selectedFontId: "dmserif", textAlign: "center", softBloom: 15 }),
+    tpl("kraft", "Kraft", { selectedRatioId: "4:5", customMarginH: 10, customMarginV: 10, backgroundColor: "#e7dcc8", selectedFontId: "playfair", textAlign: "center" }),
+    tpl("filmborder", "Film border", { selectedRatioId: "custom", customMarginH: 4, customMarginV: 4, backgroundColor: "#000000", selectedFontId: "spacemono", textAlign: "left", filmGrain: 20 }),
+    tpl("cinema", "Cinema", { selectedRatioId: "16:9", customMarginH: 5, customMarginV: 5, backgroundColor: "#000000", selectedFontId: "bebas", textAlign: "center", filmGrain: 25, softBloom: 20 }),
+    tpl("story", "Story poster", { selectedRatioId: "9:16", customMarginH: 8, customMarginV: 8, backgroundColor: "#111111", selectedFontId: "bebas", textAlign: "center" }),
   ];
 
   function loadPresets() {
@@ -396,6 +399,7 @@
       name: trimmed,
       customMarginH,
       customMarginV,
+      captionSpace,
       selectedRatioId,
       backgroundColor,
       textColor,
@@ -412,8 +416,8 @@
       logoOpacity,
       logoPosX,
       logoPosY,
-      filmGrain,
-      softBloom,
+      dev: { ...dev },
+      exifDisplay: { ...exifDisplay },
     };
     userPresets = [...userPresets, newPreset];
     persistPresets();
@@ -431,6 +435,7 @@
     if (!p) return;
     if (p.customMarginH !== undefined) customMarginH = p.customMarginH;
     if (p.customMarginV !== undefined) customMarginV = p.customMarginV;
+    captionSpace = p.captionSpace ?? 12;
     if (p.selectedRatioId !== undefined) selectedRatioId = p.selectedRatioId;
     if (p.backgroundColor !== undefined) backgroundColor = p.backgroundColor;
     if (p.textColor !== undefined) textColor = p.textColor;
@@ -447,8 +452,10 @@
     if (p.logoOpacity !== undefined) logoOpacity = p.logoOpacity;
     if (p.logoPosX !== undefined) logoPosX = p.logoPosX;
     if (p.logoPosY !== undefined) logoPosY = p.logoPosY;
-    if (p.filmGrain !== undefined) filmGrain = p.filmGrain;
-    if (p.softBloom !== undefined) softBloom = p.softBloom;
+    // Built-in and older saved presets store develop values at the top level (old "brightness" has no equivalent and is ignored).
+    for (const k of Object.keys(DEV_DEFAULTS)) if (p[k] !== undefined) dev[k] = p[k];
+    if (p.dev) Object.assign(dev, p.dev);
+    if (p.exifDisplay) exifDisplay = { ...exifDisplay, ...p.exifDisplay };
 
     updateProcessedImage();
     scheduleRender();
@@ -457,13 +464,62 @@
   onMount(() => {
     loadPalettes();
     loadPresets();
+    // Canvas text can't swap fonts by itself; redraw once the bundled caption font is ready.
+    document.fonts?.ready.then(() => scheduleRender());
   });
 
   // ─── Canvas Refs & Dimensions ──────────────────────────────────────────────
   let canvasEl = $state.raw(null);
-  let canvasDisplayWidth = $state(0);
-  let canvasDisplayHeight = $state(0);
-  let jpegQuality = $state(0.95);
+  let framedSize = $state({ w: 0, h: 0 }); // full-resolution size of the framed export
+  let photoSize = $state({ w: 0, h: 0 }); // full-resolution size of the photo alone
+  // Export settings, remembered on this device.
+  const EXPORT_SIZES = [
+    { id: "instagram", label: "Instagram", width: 1080 },
+    { id: "2k", label: "2K", long: 2048 },
+    { id: "4k", label: "4K", long: 3840 },
+    { id: "full", label: "Full size" },
+  ];
+  const FORMATS = { jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+  const QUALITIES = { good: 0.85, high: 0.92, max: 1 };
+  const EXPORT_KEY = "mf_export_v1";
+  let exportPrefs = $state({ size: "full", format: "jpeg", quality: "high" });
+  try {
+    Object.assign(exportPrefs, JSON.parse(localStorage.getItem(EXPORT_KEY) || "{}"));
+  } catch {}
+  $effect(() => {
+    try {
+      localStorage.setItem(EXPORT_KEY, JSON.stringify(exportPrefs));
+    } catch {}
+  });
+
+  /** Output scale for the current size preset (layout is proportional, so it can be computed up front). */
+  function exportScale(photoW, photoH, mode, exifOverride) {
+    const s = EXPORT_SIZES.find((x) => x.id === exportPrefs.size);
+    if (!s?.width && !s?.long) return 1;
+    const { canvasW: w, canvasH: h } =
+      mode === "framed" ? layoutFrame(photoW, photoH, exifOverride) : { canvasW: photoW, canvasH: photoH };
+    // shortcut: rounding can land the Instagram width at 1079–1081px; Instagram resamples it anyway.
+    return Math.min(1, s.width ? s.width / w : s.long / Math.max(w, h));
+  }
+
+  /** Size label for a preset, from the current photo. */
+  function sizeLabel(s, mode) {
+    const { w, h } = mode === "framed" ? framedSize : photoSize;
+    if (!w) return "";
+    const k = Math.min(1, s.width ? s.width / w : s.long ? s.long / Math.max(w, h) : 1);
+    return `${Math.round(w * k)} × ${Math.round(h * k)}`;
+  }
+
+  /** Encodes a canvas with the chosen format; the extension follows what the browser actually produced. */
+  async function encodeCanvas(canvas) {
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, FORMATS[exportPrefs.format], QUALITIES[exportPrefs.quality]),
+    );
+    if (!blob) throw new Error("this browser could not encode the image");
+    // Browsers without WebP encoding silently fall back to PNG.
+    const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[blob.type] || "png";
+    return { blob, ext };
+  }
 
   // Export & Download States
   let isDownloading = $state(false);
@@ -499,7 +555,8 @@
   }
 
   function getContrastingColor(bgColor) {
-    return calculateLuminance(bgColor) > 0.45 ? "#000000" : "#ffffff";
+    // 0.179 is where black and white give equal WCAG contrast ratios.
+    return calculateLuminance(bgColor) > 0.179 ? "#000000" : "#ffffff";
   }
 
   // ─── Dynamic Font Sizing Math ──────────────────────────────────────────────
@@ -595,6 +652,37 @@
     return proxy;
   }
 
+  // Older WebViews reject "from-image" (their default already honors EXIF), so retry without options.
+  async function decodeUpright(blob) {
+    try {
+      return await createImageBitmap(blob, { imageOrientation: "from-image" });
+    } catch {
+      return await createImageBitmap(blob);
+    }
+  }
+
+  // Dominant hue (saturation-weighted circular mean) tints the UI to match the photo; null when near-grey.
+  function dominantHue(source) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 48;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    x.drawImage(source, 0, 0, 48, 48);
+    const d = x.getImageData(0, 0, 48, 48).data;
+    let sx = 0, sy = 0, total = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), chroma = max - min;
+      if (chroma < 0.08) continue;
+      const h = max === r ? ((g - b) / chroma + 6) % 6 : max === g ? (b - r) / chroma + 2 : (r - g) / chroma + 4;
+      const w = chroma * max;
+      sx += Math.cos((h * Math.PI) / 3) * w;
+      sy += Math.sin((h * Math.PI) / 3) * w;
+      total += w;
+    }
+    if (total < 48 * 48 * 0.02) return null;
+    return Math.round(((Math.atan2(sy, sx) * 180) / Math.PI + 360) % 360);
+  }
+
   // ─── Filmstrip Thumbnail Generator ─────────────────────────────────────────
   function createThumbnail(baseCanvas) {
     const thumb = document.createElement("canvas");
@@ -651,40 +739,58 @@
           console.warn("[MinimalFrame] EXIF parse warning:", exifErr);
         }
 
-        if (detectedOrientation === 1) {
-          detectedOrientation = await getRawOrientation(arrayBuffer);
-        }
-
         // 2. Pixel decoding: RAW vs Standard
-        let decodedSource = null;
         let rawBadge = "";
         const isRaw = isRawFile(file.name);
+        let sourceBlob = file;
+        // Browsers auto-rotate standard JPEG/HEIC; RAW embedded previews carry no orientation, so rotate those manually.
+        let orientationTag = 1;
+
+        let previewImage, fullW, fullH, thumbSource;
+        // True RAW editing needs the GPU engine; without WebGL2, fall back to an 8-bit JPEG rendering.
+        const linearRaw = isRaw && canDevelop;
 
         if (isRaw) {
           hasRaw = true;
           const info = getRawFormatInfo(file.name);
           rawBadge = `${info.brand} (${info.extension.toUpperCase()})`;
-          const rawBlob = await processRawFile(file);
-          decodedSource = await createImageBitmap(rawBlob);
-        } else {
-          const blob = new Blob([arrayBuffer], {
-            type: file.type || "image/jpeg",
-          });
-          decodedSource = await createImageBitmap(blob);
+          loadingStatus = `Developing RAW ${i + 1} of ${fileList.length}: ${file.name}`;
         }
 
-        // 3. Upright Full-Resolution Base Canvas (kept untouched in memory)
-        const fullResCanvas = applyExifOrientation(
-          decodedSource,
-          detectedOrientation,
-        );
-        decodedSource.close?.();
+        if (linearRaw) {
+          // Fast half-size decode (no demosaic) for the on-screen proxy; export re-decodes at full size.
+          // LibRaw applies the camera's rotation itself.
+          const half = await decodeRawLinear(file, { half: true });
+          previewImage = downscaleLinear(half, 1080);
+          fullW = half.width * 2;
+          fullH = half.height * 2;
+          thumbSource = develop(downscaleLinear(previewImage, 160), DEV_DEFAULTS);
+          sourceBlob = null;
+        } else {
+          if (isRaw) {
+            const decoded = await processRawFile(file);
+            sourceBlob = decoded.blob;
+            if (!decoded.oriented) {
+              orientationTag =
+                detectedOrientation > 1
+                  ? detectedOrientation
+                  : await getRawOrientation(arrayBuffer);
+            }
+          }
 
-        // 4. Scaled-Down Proxy Preview (Strictly max 1080p for mobile CPU efficiency)
-        const proxyCanvas = createProxyPreview(fullResCanvas, 1080);
+          // Decode once, keep only a ≤1080px proxy. The full-res source is re-decoded from sourceBlob at export.
+          const bitmap = await decodeUpright(sourceBlob);
+          previewImage = applyExifOrientation(createProxyPreview(bitmap, 1080), orientationTag);
+          const isRotated90 = orientationTag >= 5;
+          fullW = isRotated90 ? bitmap.height : bitmap.width;
+          fullH = isRotated90 ? bitmap.width : bitmap.height;
+          bitmap.close();
+          thumbSource = previewImage;
+        }
 
         // 5. Filmstrip Thumbnail (120px)
-        const thumbUrl = createThumbnail(proxyCanvas);
+        const thumbUrl = createThumbnail(thumbSource);
+        const hue = dominantHue(thumbSource);
 
         // 6. Initial Editable EXIF Override values
         const cameraName =
@@ -704,14 +810,18 @@
           id: `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
           file,
           name: file.name,
-          originalImage: fullResCanvas,       // 24MP full-res source untouched in memory for export
-          originalImageBlob: file,            // Original file/blob preserved
-          previewImage: proxyCanvas,          // Scaled-down proxy (max 1920px) for live preview
-          baseImage: proxyCanvas,             // Backwards compatibility alias
+          sourceBlob,                         // Encoded original (or decoded RAW JPEG); decoded only at export
+          fullW,
+          fullH,
+          previewImage,                       // ≤1080px proxy: a canvas, or 16-bit linear data for RAW
+          linearRaw,                          // export re-decodes the RAW file at full size
           thumbUrl,
           isRaw,
           rawBadge,
-          orientationTag: detectedOrientation,
+          orientationTag,
+          hue,
+          rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
+          selected: true,                   // included in batch export
           exifOverride: {
             model: cameraName,
             lens: lensName,
@@ -773,10 +883,6 @@
       if (removed.thumbUrl && removed.thumbUrl.startsWith("blob:")) {
         URL.revokeObjectURL(removed.thumbUrl);
       }
-      if (removed.originalImage) {
-        removed.originalImage.width = 0;
-        removed.originalImage.height = 0;
-      }
       if (removed.previewImage) {
         removed.previewImage.width = 0;
         removed.previewImage.height = 0;
@@ -793,10 +899,6 @@
     filesList.forEach((item) => {
       if (item.thumbUrl && item.thumbUrl.startsWith("blob:")) {
         URL.revokeObjectURL(item.thumbUrl);
-      }
-      if (item.originalImage) {
-        item.originalImage.width = 0;
-        item.originalImage.height = 0;
       }
       if (item.previewImage) {
         item.previewImage.width = 0;
@@ -817,38 +919,30 @@
     scheduleRender(true);
   }
 
-  // ─── Color & Light Engine (Proxy / Live Preview Only) ──────────────────────
+  // ─── Develop (GPU) ─────────────────────────────────────────────────────────
+  // GPU develop when available; otherwise a CSS-filter approximation (exposure, contrast, saturation only).
+  function developCanvas(source, target) {
+    if (canDevelop) return develop(source, dev, target);
+    target.width = source.width;
+    target.height = source.height;
+    const ctx = target.getContext("2d", { alpha: false });
+    ctx.filter = cssFilterFor(dev);
+    ctx.drawImage(source, 0, 0);
+    return target;
+  }
+
+  // Live preview develops only the ≤1080px proxy; grain and bloom are CSS overlays until export.
+  let previewWorkCanvas = null;
+  let histo = $state.raw(null);
   function updateProcessedImage() {
-    // Live preview operates strictly on the proxy preview image!
-    const base = activeItem?.previewImage || activeItem?.baseImage;
+    const base = activeItem?.previewImage;
     if (!base) {
       processedImage = null;
       return;
     }
-
-    const offscreen = document.createElement("canvas");
-    offscreen.width = base.width;
-    offscreen.height = base.height;
-    const ctx = offscreen.getContext("2d", { alpha: false });
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-
-    const exposureFactor = Math.pow(2, exposure);
-    const totalBrightness = Math.max(
-      0,
-      Math.round((100 + brightness) * exposureFactor),
-    );
-    const totalContrast = Math.max(0, 100 + contrast);
-    const totalSaturation = Math.max(0, 100 + saturation);
-
-    ctx.filter = `brightness(${totalBrightness}%) contrast(${totalContrast}%) saturate(${totalSaturation}%)`;
-    ctx.drawImage(base, 0, 0);
-
-    // ZERO JS pixel math during live preview!
-    // Film Grain and Soft Bloom are faked on the live preview via GPU-accelerated CSS overlays.
-    // Heavy pixel-by-pixel applyAnalogEffects is executed strictly during full-resolution export.
-
-    processedImage = offscreen;
+    // Reuse one canvas across slider ticks instead of allocating a new one per frame.
+    processedImage = developCanvas(base, (previewWorkCanvas ??= document.createElement("canvas")));
+    histo = histogram(processedImage);
   }
 
   // ─── EXIF Text Formatting with Editable Overrides ──────────────────────────
@@ -880,34 +974,69 @@
     return lines;
   }
 
+  // ─── Frame layout (one function for preview and export, so both always match) ─
+  // Every size is proportional to the photo, so the same settings give the same result at any resolution.
+  const measureCtx = document.createElement("canvas").getContext("2d");
+  const captionFamily = () => (allFonts.find((f) => f.id === selectedFontId) || SYSTEM_FONTS[0]).css;
+
+  function layoutFrame(srcW, srcH, exifOverride) {
+    return computeFrameLayout(srcW, srcH, showExif && exifOverride ? buildExifLines(exifOverride, exifDisplay) : [], {
+      marginH: customMarginH,
+      marginV: customMarginV,
+      ratioId: selectedRatioId,
+      ratio: RATIOS.find((r) => r.id === selectedRatioId),
+      captionSpace,
+      fontSize: autoFontSize ? 26 * dynamicScaleFactor : manualFontSize,
+      zone: textZone,
+      align: textAlign,
+      posX: textPosX,
+      posY: textPosY,
+      measure: (text, px) => {
+        measureCtx.font = `600 ${px}px ${captionFamily()}`;
+        return measureCtx.measureText(text).width;
+      },
+    });
+  }
+
+  /** Draws `photo` with border, caption and logo into `canvas` (resized to fit). */
+  function drawFramed(canvas, photo, exifOverride) {
+    const L = layoutFrame(photo.width, photo.height, exifOverride);
+    if (canvas.width !== L.canvasW || canvas.height !== L.canvasH) {
+      canvas.width = L.canvasW;
+      canvas.height = L.canvasH;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, L.canvasW, L.canvasH);
+    ctx.drawImage(photo, L.imgX, L.imgY);
+    if (L.caption) {
+      const { lines, size, x, y0, lineH } = L.caption;
+      ctx.textAlign = textAlign;
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = textColor;
+      lines.forEach((line, i) => {
+        const isModel = line.type === "model";
+        ctx.font = `${isModel ? 600 : 400} ${isModel ? size : size * 0.88}px ${captionFamily()}`;
+        ctx.fillText(line.text, x, y0 + i * lineH);
+      });
+    }
+    drawLogoOnCanvas(ctx, L.canvasW, L.canvasH);
+    return canvas;
+  }
+
   // ─── Text Placement & Bounds Clamping ──────────────────────────────────────
   function setAlignment(align) {
     textAlign = align;
-    if (align === "left") {
-      textPosX = Math.max(5, customMarginH);
-    } else if (align === "center") {
-      textPosX = 50;
-    } else if (align === "right") {
-      textPosX = Math.min(95, 100 - customMarginH);
-    }
+    textPosX = { left: 0, center: 50, right: 100 }[align];
   }
 
   function setZone(zone) {
     textZone = zone;
-    if (zone === "bottom") {
-      textPosY = Math.max(ySliderMin, Math.min(93, ySliderMax));
-    } else {
-      textPosY = Math.max(ySliderMin, Math.min(5, ySliderMax));
-    }
   }
 
   function resetTextPosition() {
     setAlignment(textAlign);
-    if (textZone === "bottom") {
-      textPosY = Math.max(ySliderMin, Math.min(93, ySliderMax));
-    } else {
-      textPosY = Math.max(ySliderMin, Math.min(5, ySliderMax));
-    }
+    textPosY = 50;
   }
 
   function resetMargins() {
@@ -940,184 +1069,31 @@
    */
   function renderCanvas() {
     if (!canvasEl || !processedImage || !activeItem) return;
-
-    const ctx = canvasEl.getContext("2d");
     const srcW = processedImage.width;
     const srcH = processedImage.height;
+    const fullScale = (activeItem.fullW || srcW) / srcW;
 
-    // ── CASE A: Photo Editor Mode ──────────────────────────────────────────
+    // Full-resolution sizes for the info line and the export sheet.
+    const L = layoutFrame(srcW, srcH, activeItem.exifOverride);
+    framedSize = { w: Math.round(L.canvasW * fullScale), h: Math.round(L.canvasH * fullScale) };
+    photoSize = { w: activeItem.fullW || srcW, h: activeItem.fullH || srcH };
+
     if (activeTab === "editor") {
-      if (canvasEl.width !== srcW || canvasEl.height !== srcH) {
-        canvasEl.width = srcW;
-        canvasEl.height = srcH;
-      }
-      // Report full-resolution 24MP export dimensions to the UI badge
-      const fullResW = activeItem.originalImage ? activeItem.originalImage.width : srcW;
-      const fullResH = activeItem.originalImage ? activeItem.originalImage.height : srcH;
-      canvasDisplayWidth = fullResW;
-      canvasDisplayHeight = fullResH;
-
-      ctx.drawImage(processedImage, 0, 0);
-      return;
-    }
-
-    // ── CASE B: Frame & EXIF Mode ──────────────────────────────────────────
-    const effMarginH = Math.max(5, customMarginH) / 100;
-    const effMarginV = Math.max(5, customMarginV) / 100;
-
-    const padX = Math.round(srcW * effMarginH);
-    const padY = Math.round(srcH * effMarginV);
-
-    let canvasW, canvasH;
-    let imgX, imgY, drawW, drawH;
-    drawW = srcW;
-    drawH = srcH;
-
-    const ratio = RATIOS.find((r) => r.id === selectedRatioId) || RATIOS[0];
-
-    if (ratio.id === "custom") {
-      canvasW = srcW + 2 * padX;
-      canvasH = srcH + 2 * padY;
-      imgX = padX;
-      imgY = padY;
-    } else if (ratio.id === "orig") {
-      canvasW = srcW + 2 * padX;
-      const extraBottom =
-        showExif && textZone === "bottom" ? Math.round(srcH * 0.12) : 0;
-      const extraTop =
-        showExif && textZone === "top" ? Math.round(srcH * 0.12) : 0;
-      canvasH = srcH + 2 * padY + extraBottom + extraTop;
-      imgX = padX;
-      imgY = padY + extraTop;
+      // Edit mode shows the photo alone for clear colour judgement.
+      canvasEl.width = srcW;
+      canvasEl.height = srcH;
+      canvasEl.getContext("2d").drawImage(processedImage, 0, 0);
     } else {
-      const minContentW = srcW + 2 * padX;
-      const minContentH = srcH + 2 * padY;
-      const targetAR = ratio.w / ratio.h;
-
-      if (minContentW / minContentH >= targetAR) {
-        canvasW = minContentW;
-        canvasH = Math.round(minContentW / targetAR);
-      } else {
-        canvasH = minContentH;
-        canvasW = Math.round(minContentH * targetAR);
-      }
-
-      imgX = Math.round((canvasW - drawW) / 2);
-      imgY = Math.round((canvasH - drawH) / 2);
+      drawFramed(canvasEl, processedImage, activeItem.exifOverride);
     }
-
-    if (canvasEl.width !== canvasW || canvasEl.height !== canvasH) {
-      canvasEl.width = canvasW;
-      canvasEl.height = canvasH;
-    }
-
-    // Report full-resolution 24MP framed dimensions to the UI badge
-    const fullSourceW = activeItem.originalImage ? activeItem.originalImage.width : srcW;
-    const fullSourceH = activeItem.originalImage ? activeItem.originalImage.height : srcH;
-    const fullScale = fullSourceW / srcW;
-    canvasDisplayWidth = Math.round(canvasW * fullScale);
-    canvasDisplayHeight = Math.round(canvasH * fullScale);
-
-    // 1. Background Fill
-    ctx.fillStyle = backgroundColor;
-    ctx.fillRect(0, 0, canvasW, canvasH);
-
-    // 2. Draw Processed Image
-    ctx.drawImage(processedImage, imgX, imgY, drawW, drawH);
-
-    // 3. EXIF Typography with Editable Overrides & Non-Overlapping Math
-    const imageRect = {
-      left: imgX,
-      right: imgX + drawW,
-      top: imgY,
-      bottom: imgY + drawH,
-    };
-
-    if (showExif && activeItem.exifOverride && selectedExifCount > 0) {
-      const exifLines = buildExifLines(activeItem.exifOverride, exifDisplay);
-      if (exifLines.length > 0) {
-        const basePx = Math.max(18, Math.min(68, Math.round(canvasW * 0.018)));
-        const finalFontSize = autoFontSize
-          ? Math.round(basePx * dynamicScaleFactor)
-          : manualFontSize;
-
-        const lineH = Math.round(finalFontSize * 1.55);
-        const totalBlockH = (exifLines.length - 1) * lineH;
-        const halfBlockH =
-          Math.round(totalBlockH / 2) + Math.round(finalFontSize * 0.5);
-        const padPx = 14;
-
-        if (textZone === "bottom") {
-          const minSafeY = Math.ceil(
-            ((imageRect.bottom + halfBlockH + padPx) / canvasH) * 100,
-          );
-          const maxSafeY = Math.floor(
-            ((canvasH - halfBlockH - padPx) / canvasH) * 100,
-          );
-          ySliderMin = Math.max(0, Math.min(minSafeY, 98));
-          ySliderMax = Math.max(ySliderMin, Math.min(maxSafeY, 99));
-        } else {
-          const minSafeY = Math.ceil(((halfBlockH + padPx) / canvasH) * 100);
-          const maxSafeY = Math.floor(
-            ((imageRect.top - halfBlockH - padPx) / canvasH) * 100,
-          );
-          ySliderMin = Math.max(1, Math.min(minSafeY, 98));
-          ySliderMax = Math.max(ySliderMin, Math.min(maxSafeY, 99));
-        }
-
-        const clampedYPercent = Math.max(
-          ySliderMin,
-          Math.min(textPosY, ySliderMax),
-        );
-        const anchorX = Math.round((textPosX / 100) * canvasW);
-        const anchorY = Math.round((clampedYPercent / 100) * canvasH);
-
-        let safeAnchorY = anchorY;
-        if (textZone === "bottom") {
-          safeAnchorY = Math.max(
-            imageRect.bottom + halfBlockH + padPx,
-            anchorY,
-          );
-        } else {
-          safeAnchorY = Math.min(imageRect.top - halfBlockH - padPx, anchorY);
-        }
-
-        ctx.textAlign = textAlign;
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = textColor;
-
-        const selectedFontObj =
-          SYSTEM_FONTS.find((f) => f.id === selectedFontId) || SYSTEM_FONTS[1];
-        const fontCssFamily = selectedFontObj.css;
-
-        const startY = safeAnchorY - Math.round(totalBlockH / 2);
-
-        exifLines.forEach((line, i) => {
-          const isModel = line.type === "model";
-          const fw = isModel ? "600" : "400";
-          const size = isModel
-            ? finalFontSize
-            : Math.round(finalFontSize * 0.88);
-          ctx.font = `${fw} ${size}px ${fontCssFamily}`;
-          ctx.fillText(line.text, anchorX, startY + i * lineH);
-        });
-      }
-    }
-
-    // 4. Personal Logo & Watermark
-    if (logoImage) {
-      drawLogoOnCanvas(ctx, canvasW, canvasH);
-    }
+    canvasAspect = canvasEl.width / canvasEl.height;
   }
 
   // ─── Reactive State Subscriptions (rAF Throttled) ──────────────────────────
   $effect(() => {
     // When activeItem changes or color sliders move, schedule image update + canvas render
     const _ai = activeItem;
-    const _exp = exposure;
-    const _br = brightness;
-    const _co = contrast;
-    const _sa = saturation;
+    const _dev = JSON.stringify(dev); // every develop slider
 
     scheduleRender(true);
   });
@@ -1165,195 +1141,43 @@
     scheduleRender(false);
   });
 
-  // ─── Offscreen Canvas Generator for Guaranteed Export ───────────────────────
-  function generateFramedCanvasForImage(processedCanvas, exifOverride) {
-    if (!processedCanvas) return null;
-
-    const srcW = processedCanvas.width;
-    const srcH = processedCanvas.height;
-
-    const effMarginH = Math.max(5, customMarginH) / 100;
-    const effMarginV = Math.max(5, customMarginV) / 100;
-
-    const padX = Math.round(srcW * effMarginH);
-    const padY = Math.round(srcH * effMarginV);
-
-    let canvasW, canvasH;
-    let imgX, imgY, drawW, drawH;
-    drawW = srcW;
-    drawH = srcH;
-
-    const ratio = RATIOS.find((r) => r.id === selectedRatioId) || RATIOS[0];
-
-    if (ratio.id === "custom") {
-      canvasW = srcW + 2 * padX;
-      canvasH = srcH + 2 * padY;
-      imgX = padX;
-      imgY = padY;
-    } else if (ratio.id === "orig") {
-      canvasW = srcW + 2 * padX;
-      const extraBottom =
-        showExif && textZone === "bottom" ? Math.round(srcH * 0.12) : 0;
-      const extraTop =
-        showExif && textZone === "top" ? Math.round(srcH * 0.12) : 0;
-      canvasH = srcH + 2 * padY + extraBottom + extraTop;
-      imgX = padX;
-      imgY = padY + extraTop;
-    } else {
-      const minContentW = srcW + 2 * padX;
-      const minContentH = srcH + 2 * padY;
-      const targetAR = ratio.w / ratio.h;
-
-      if (minContentW / minContentH >= targetAR) {
-        canvasW = minContentW;
-        canvasH = Math.round(minContentW / targetAR);
-      } else {
-        canvasH = minContentH;
-        canvasW = Math.round(minContentH * targetAR);
-      }
-
-      imgX = Math.round((canvasW - drawW) / 2);
-      imgY = Math.round((canvasH - drawH) / 2);
-    }
-
-    const exportCanvas = document.createElement("canvas");
-    exportCanvas.width = canvasW;
-    exportCanvas.height = canvasH;
-    const ctx = exportCanvas.getContext("2d");
-
-    // Fill background
-    ctx.fillStyle = backgroundColor;
-    ctx.fillRect(0, 0, canvasW, canvasH);
-
-    // Draw processed image
-    ctx.drawImage(processedCanvas, imgX, imgY, drawW, drawH);
-
-    // Draw EXIF typography
-    const imageRect = {
-      left: imgX,
-      right: imgX + drawW,
-      top: imgY,
-      bottom: imgY + drawH,
-    };
-
-    if (showExif && exifOverride && selectedExifCount > 0) {
-      const exifLines = buildExifLines(exifOverride, exifDisplay);
-      if (exifLines.length > 0) {
-        // Font sizing calibrated proportionally to canvas resolution
-        const previewRefW = canvasEl?.width || 1920;
-        const scaleFactor = canvasW / previewRefW;
-        const basePx = Math.max(18, Math.round(canvasW * 0.018));
-        const finalFontSize = autoFontSize
-          ? Math.round(basePx * dynamicScaleFactor)
-          : Math.max(12, Math.round(manualFontSize * scaleFactor));
-
-        const lineH = Math.round(finalFontSize * 1.55);
-        const totalBlockH = (exifLines.length - 1) * lineH;
-        const halfBlockH =
-          Math.round(totalBlockH / 2) + Math.round(finalFontSize * 0.5);
-        const padPx = Math.round(14 * scaleFactor);
-
-        const minSafeY =
-          textZone === "bottom"
-            ? Math.ceil(
-                ((imageRect.bottom + halfBlockH + padPx) / canvasH) * 100,
-              )
-            : Math.ceil(((halfBlockH + padPx) / canvasH) * 100);
-        const maxSafeY =
-          textZone === "bottom"
-            ? Math.floor(((canvasH - halfBlockH - padPx) / canvasH) * 100)
-            : Math.floor(
-                ((imageRect.top - halfBlockH - padPx) / canvasH) * 100,
-              );
-
-        const clampedYPercent = Math.max(
-          minSafeY,
-          Math.min(textPosY, maxSafeY),
-        );
-        const anchorX = Math.round((textPosX / 100) * canvasW);
-        const anchorY = Math.round((clampedYPercent / 100) * canvasH);
-
-        let safeAnchorY = anchorY;
-        if (textZone === "bottom") {
-          safeAnchorY = Math.max(
-            imageRect.bottom + halfBlockH + padPx,
-            anchorY,
-          );
-        } else {
-          safeAnchorY = Math.min(imageRect.top - halfBlockH - padPx, anchorY);
-        }
-
-        ctx.textAlign = textAlign;
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = textColor;
-
-        const selectedFontObj =
-          SYSTEM_FONTS.find((f) => f.id === selectedFontId) || SYSTEM_FONTS[1];
-        const fontCssFamily = selectedFontObj.css;
-        const startY = safeAnchorY - Math.round(totalBlockH / 2);
-
-        exifLines.forEach((line, i) => {
-          const isModel = line.type === "model";
-          const fw = isModel ? "600" : "400";
-          const size = isModel
-            ? finalFontSize
-            : Math.round(finalFontSize * 0.88);
-          ctx.font = `${fw} ${size}px ${fontCssFamily}`;
-          ctx.fillText(line.text, anchorX, startY + i * lineH);
-        });
-      }
-    }
-
-    // Draw Personal Logo & Watermark
-    if (logoImage) {
-      drawLogoOnCanvas(ctx, canvasW, canvasH);
-    }
-
-    return exportCanvas;
-  }
-
   // ─── Heavy Full-Resolution Export Engine (Off-Screen 24MP Processing) ──────
   async function generateFullResExportCanvas(item, mode = "framed") {
     if (!item) return null;
 
-    // 1. Obtain full-res base source canvas (untouched 24MP canvas)
-    let sourceCanvas = item.originalImage || item.baseImage;
-    if (!sourceCanvas && item.originalImageBlob) {
-      try {
-        const bitmap = await createImageBitmap(item.originalImageBlob);
-        sourceCanvas = applyExifOrientation(bitmap, item.orientationTag || 1);
-        bitmap.close?.();
-      } catch (e) {
-        console.warn("[MinimalFrame] Failed to decode originalImageBlob, using fallback:", e);
-      }
+    // 1–2. Decode the full-res original on demand (only one lives in memory at a time) and develop it
+    //      with the same shader as the preview, in tiles.
+    let colorCanvas;
+    if (item.linearRaw) {
+      const raw = await decodeRawLinear(item.file);
+      colorCanvas = develop(raw, dev);
+    } else {
+      const bitmap = await decodeUpright(item.sourceBlob);
+      const sourceCanvas =
+        item.orientationTag > 1
+          ? applyExifOrientation(bitmap, item.orientationTag)
+          : bitmap;
+      colorCanvas = developCanvas(sourceCanvas, document.createElement("canvas"));
+      bitmap.close();
+      if (sourceCanvas !== bitmap) sourceCanvas.width = sourceCanvas.height = 0;
     }
-    if (!sourceCanvas) return null;
 
-    const fullW = sourceCanvas.width;
-    const fullH = sourceCanvas.height;
-
-    // 2. Full-Resolution Color & Light Adjustment Canvas
-    const colorCanvas = document.createElement("canvas");
-    colorCanvas.width = fullW;
-    colorCanvas.height = fullH;
-    const colorCtx = colorCanvas.getContext("2d", { alpha: false });
-    colorCtx.imageSmoothingEnabled = true;
-    colorCtx.imageSmoothingQuality = "high";
-
-    const exposureFactor = Math.pow(2, exposure);
-    const totalBrightness = Math.max(
-      0,
-      Math.round((100 + brightness) * exposureFactor),
-    );
-    const totalContrast = Math.max(0, 100 + contrast);
-    const totalSaturation = Math.max(0, 100 + saturation);
-
-    colorCtx.filter = `brightness(${totalBrightness}%) contrast(${totalContrast}%) saturate(${totalSaturation}%)`;
-    colorCtx.drawImage(sourceCanvas, 0, 0);
+    // Size preset: shrink before grain and bloom so they keep their look at small sizes.
+    const k = exportScale(colorCanvas.width, colorCanvas.height, mode, item.exifOverride);
+    if (k < 1) {
+      const small = document.createElement("canvas");
+      small.width = Math.max(1, Math.round(colorCanvas.width * k));
+      small.height = Math.max(1, Math.round(colorCanvas.height * k));
+      const sctx = small.getContext("2d", { alpha: false });
+      sctx.imageSmoothingQuality = "high";
+      sctx.drawImage(colorCanvas, 0, 0, small.width, small.height);
+      colorCanvas.width = colorCanvas.height = 0;
+      colorCanvas = small;
+    }
 
     // 3. Heavy Pixel Math (Film Grain & Soft Bloom) executed strictly on export!
-    if (softBloom > 0 || filmGrain > 0) {
-      applyAnalogEffects(colorCanvas, { grain: filmGrain, bloom: softBloom });
+    if (dev.softBloom > 0 || dev.filmGrain > 0) {
+      applyAnalogEffects(colorCanvas, { grain: dev.filmGrain, bloom: dev.softBloom });
     }
 
     if (mode === "edited") {
@@ -1361,7 +1185,7 @@
     }
 
     // 4. Exact Percentage Framing & Scaled Fonts for Full Resolution
-    const framed = generateFramedCanvasForImage(colorCanvas, item.exifOverride);
+    const framed = drawFramed(document.createElement("canvas"), colorCanvas, item.exifOverride);
     // Explicitly free temporary colorCanvas memory
     colorCanvas.width = 0;
     colorCanvas.height = 0;
@@ -1373,7 +1197,7 @@
     if (!processedImage || !activeItem) return;
 
     isDownloading = true;
-    downloadStatus = "Processing 24MP full-resolution export…";
+    downloadStatus = "Exporting…";
 
     try {
       const exportType =
@@ -1396,34 +1220,18 @@
       const cleanName =
         rawName.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim() || "photo";
       const suffix = exportType === "edited" ? "_edited" : "_framed";
-      const filename = `${cleanName}${suffix}.jpg`;
+      const { blob, ext } = await encodeCanvas(exportCanvas);
+      exportCanvas.width = exportCanvas.height = 0;
+      const filename = `${cleanName}${suffix}.${ext}`;
       fallbackFilename = filename;
 
-      let blob = null;
-      try {
-        blob = await new Promise((resolve) => {
-          exportCanvas.toBlob((b) => resolve(b), "image/jpeg", jpegQuality);
-        });
-      } catch (blobErr) {
-        console.warn(
-          "[MinimalFrame] toBlob error, falling back to dataUrl:",
-          blobErr,
-        );
+      if (fallbackDownloadUrl && fallbackDownloadUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(fallbackDownloadUrl);
       }
-
-      let downloadUrl;
-      if (blob && blob.size > 0) {
-        if (fallbackDownloadUrl && fallbackDownloadUrl.startsWith("blob:")) {
-          URL.revokeObjectURL(fallbackDownloadUrl);
-        }
-        downloadUrl = URL.createObjectURL(blob);
-      } else {
-        downloadUrl = exportCanvas.toDataURL("image/jpeg", jpegQuality);
-      }
-
+      const downloadUrl = URL.createObjectURL(blob);
       fallbackDownloadUrl = downloadUrl;
 
-      // Chrome Android APK compliant download trigger with explicit .jpg extension
+      // Explicit extension in `download` avoids Chrome's extensionless-blob bug.
       const link = document.createElement("a");
       link.style.display = "none";
       link.href = downloadUrl;
@@ -1431,40 +1239,36 @@
       link.download = filename;
       document.body.appendChild(link);
       link.click();
-      setTimeout(() => {
-        link.remove();
-        if (downloadUrl.startsWith("blob:")) {
-          URL.revokeObjectURL(downloadUrl);
-          if (fallbackDownloadUrl === downloadUrl) fallbackDownloadUrl = null;
-        }
-      }, 2000);
+      // Keep the blob alive for the manual fallback link; it is revoked on the next export or on Clear All.
+      setTimeout(() => link.remove(), 2000);
 
-      downloadStatus = "✓ Downloaded (Full-Res)!";
+      downloadStatus = `Saved ${filename}`;
       setTimeout(() => {
         downloadStatus = "";
       }, 4000);
     } catch (err) {
       console.error("[MinimalFrame] Download failed:", err);
       loadError = `Download failed: ${err.message}`;
-      downloadStatus = "⚠️ Download error";
+      downloadStatus = "Export failed. See the message above the photo.";
     } finally {
       isDownloading = false;
     }
   }
 
   // ─── Batch Export All (.zip) with JSZip ────────────────────────────────────
-  async function exportBatch() {
-    if (filesList.length === 0) return;
+  async function exportBatch(mode = "framed") {
+    const batch = filesList.filter((item) => item.selected);
+    if (batch.length === 0) return;
 
     isBatchExporting = true;
-    const total = filesList.length;
+    const total = batch.length;
     batchProgress = { current: 0, total, percent: 0, filename: "" };
 
     try {
       let zip = new JSZip();
 
       for (let i = 0; i < total; i++) {
-        const item = filesList[i];
+        const item = batch[i];
         batchProgress = {
           current: i + 1,
           total,
@@ -1478,24 +1282,15 @@
         // Generate full-res framed canvas with pixel-level grain/bloom
         const exportCanvas = await generateFullResExportCanvas(
           item,
-          activeTab === "editor" ? "edited" : "framed",
+          mode,
         );
         if (!exportCanvas) continue;
 
-        // Convert to JPEG Blob
-        const blob = await new Promise((resolve) => {
-          exportCanvas.toBlob(resolve, "image/jpeg", jpegQuality);
-        });
-
-        if (blob) {
-          const rawName = item.name.replace(/\.[^.]+$/, "");
-          const cleanName =
-            rawName.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim() ||
-            `photo_${i + 1}`;
-          let entryName = `framed_${cleanName}.jpg`;
-          if (!entryName.toLowerCase().endsWith(".jpg")) entryName += ".jpg";
-          zip.file(entryName, blob);
-        }
+        const { blob, ext } = await encodeCanvas(exportCanvas);
+        exportCanvas.width = exportCanvas.height = 0;
+        const rawName = item.name.replace(/\.[^.]+$/, "");
+        const cleanName = rawName.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim() || `photo_${i + 1}`;
+        zip.file(`${mode}_${cleanName}.${ext}`, blob);
       }
 
       batchProgress.filename = "Compressing ZIP package…";
@@ -1523,7 +1318,7 @@
         URL.revokeObjectURL(zipUrl);
       }, 4000);
 
-      downloadStatus = `✓ Exported ${total} photos in ZIP!`;
+      downloadStatus = `Saved ${total} photos to ${zipFilename}`;
       setTimeout(() => {
         downloadStatus = "";
       }, 5000);
@@ -1557,3003 +1352,1650 @@
   }
 </script>
 
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     TEMPLATE: Dual-Mode Desktop Dashboard with Filmstrip & Batch Export
-════════════════════════════════════════════════════════════════════════════ -->
+<input
+  bind:this={fileInput}
+  id="mf-file-input"
+  class="sr-only"
+  type="file"
+  multiple
+  accept=".jpg,.jpeg,.png,.webp,.avif,.heic,.arw,.cr2,.cr3,.dng,.nef,.orf,.raf,.rw2,.pef,.srw"
+  onchange={onFileInput}
+  tabindex="-1"
+  aria-hidden="true"
+/>
 
-<main id="mf-app">
-  <!-- ─── Top Navigation Bar ──────────────────────────────────────────────── -->
-  <header class="mf-header">
-    <div class="mf-logo" aria-label="MinimalFrame">
-      <svg
-        viewBox="0 0 28 28"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.7"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <rect x="2" y="5" width="24" height="18" rx="3" />
-        <rect x="5" y="8" width="14" height="11" rx="1.5" />
-        <circle cx="22" cy="10" r="1.3" fill="currentColor" stroke="none" />
-      </svg>
-      <span>MinimalFrame</span>
-    </div>
+{#snippet icon(name)}
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICONS[name]} /></svg>
+{/snippet}
 
-    <!-- Mode Switcher Tabs -->
-    <div class="mf-nav-tabs" role="tablist" aria-label="Tool Modes">
-      <button
-        id="tab-editor"
-        class="mf-tab-btn"
-        class:active={activeTab === "editor"}
-        onclick={() => {
-          activeTab = "editor";
-        }}
-        role="tab"
-        aria-selected={activeTab === "editor"}
-      >
-        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-          <path
-            fill-rule="evenodd"
-            d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z"
-            clip-rule="evenodd"
-          />
-        </svg>
-        <span>Photo Editor</span>
+<main
+  class="app"
+  class:empty={filesList.length === 0}
+  class:dragging={isDragging}
+  style:--hue={activeItem?.hue ?? 38}
+  ondrop={onDrop}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+>
+  <!-- Ambient backdrop: a deep blur of the current photo, so the whole app takes on its colors. -->
+  <div class="ambient" aria-hidden="true">
+    {#if activeItem}
+      {#key activeItem.id}<img src={activeItem.thumbUrl} alt="" />{/key}
+    {:else}
+      <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+    {/if}
+  </div>
+
+  <header class="bar glass">
+    <span class="wordmark">MinimalFrame</span>
+    {#if activeItem}
+      <p class="meta">
+        <span class="meta-name">{activeItem.name}</span>
+        {#if framedSize.w}<span class="meta-dim">{activeTab === "framing" ? framedSize.w : photoSize.w} × {activeTab === "framing" ? framedSize.h : photoSize.h}</span>{/if}
+        {#if activeItem.rawBadge}<span class="pill">RAW</span>{/if}
+      </p>
+    {/if}
+    {#if processedImage}
+      <button class="btn accent bar-export" onclick={() => exportDialog?.showModal()}>
+        {@render icon("export")}Export
       </button>
-
-      <button
-        id="tab-framing"
-        class="mf-tab-btn"
-        class:active={activeTab === "framing"}
-        onclick={() => {
-          activeTab = "framing";
-        }}
-        role="tab"
-        aria-selected={activeTab === "framing"}
-      >
-        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-          <path
-            d="M3 4a1 1 0 011-1h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm2 1v10h10V5H5z"
-          />
-        </svg>
-        <span>Frame & EXIF</span>
-      </button>
-    </div>
-
-    <!-- Header Status Indicator -->
-    <div class="mf-header-status">
-      {#if filesList.length > 0}
-        <span class="mf-batch-count-pill" title="Total Loaded Photos">
-          {filesList.length}
-          {filesList.length === 1 ? "Photo" : "Photos"}
-        </span>
-      {/if}
-      {#if activeItem?.rawBadge}
-        <span class="mf-raw-pill">{activeItem.rawBadge}</span>
-      {/if}
-      {#if activeItem?.orientationTag > 1}
-        <span class="mf-orient-pill" title="Auto-Rotated via EXIF Orientation">
-          ↺ Auto-Rotated
-        </span>
-      {/if}
-    </div>
+    {/if}
   </header>
 
-  <!-- ─── 100vh Desktop Dashboard Layout ──────────────────────────────────── -->
-  <div class="mf-layout">
-    <!-- ════════════════════ LEFT: Contextual Control Column ═════════════════ -->
-    <aside class="mf-sidebar" aria-label="Controls">
-      <!-- ── Section A: Photo Source (Batch & Drag-Drop) ──────────────────── -->
-      <section class="mf-card" aria-labelledby="lbl-open">
-        <div class="mf-card-title-row">
-          <h2 class="mf-card-title" id="lbl-open">
-            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path
-                d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"
-              />
-            </svg>
-            Photos ({filesList.length})
-          </h2>
-          {#if filesList.length > 0}
-            <button
-              class="mf-btn-micro"
-              onclick={clearAllImages}
-            >
-              Clear All
-            </button>
-          {/if}
-        </div>
-
-        <!-- svelte-ignore a11y_interactive_supports_focus -->
-        <div
-          id="drop-zone"
-          class="mf-drop-zone"
-          class:dragging={isDragging}
-          class:loaded={filesList.length > 0}
-          ondrop={onDrop}
-          ondragover={onDragOver}
-          ondragleave={onDragLeave}
-          role="button"
-          aria-label="Drop multiple images or click Browse"
-          onkeydown={(e) => {
-            if (e.key === "Enter" || e.key === " ")
-              document.getElementById("mf-file-input").click();
-          }}
-          tabindex="0"
-        >
-          {#if isLoading}
-            <span class="mf-spinner" role="status" aria-label="Loading"></span>
-            <span class="dz-label">{loadingStatus || "Decoding photos…"}</span>
-          {:else if filesList.length > 0}
-            <svg
-              class="dz-icon ok"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <path d="M8 12l3 3 5-5" />
-            </svg>
-            <span class="dz-filename">{activeItem?.name}</span>
-            <span class="dz-hint">Drop more photos to add to batch</span>
-          {:else}
-            <svg
-              class="dz-icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
-              aria-hidden="true"
-            >
-              <path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
-              <polyline points="16 6 12 2 8 6" />
-              <line x1="12" y1="2" x2="12" y2="15" />
-            </svg>
-            <span class="dz-label">Drop photos or RAW files</span>
-            <span class="dz-hint"
-              >Batch support: JPEG · PNG · ARW · CR2 · CR3 · DNG · NEF</span
-            >
-          {/if}
-
-          <label for="mf-file-input" class="mf-browse-label"
-            >Browse Files…</label
-          >
-          <input
-            id="mf-file-input"
-            type="file"
-            multiple
-            accept=".jpg,.jpeg,.png,.webp,.avif,.arw,.cr2,.cr3,.dng,.nef,.orf,.raf,.rw2,.pef,.srw"
-            onchange={onFileInput}
-          />
-        </div>
-
-        {#if loadError}
-          <div class="mf-alert-warn" role="alert">{loadError}</div>
-        {/if}
-      </section>
-
-      <!-- ── Section: Layout Presets & Templates ──────────────────────────── -->
-      <section class="mf-card" aria-labelledby="lbl-presets">
-        <div class="mf-card-title-row">
-          <h2 class="mf-card-title" id="lbl-presets">
-            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" />
-            </svg>
-            Presets & Templates
-          </h2>
-          <button
-            class="mf-btn-micro highlight"
-            onclick={() => {
-              newPresetName = "";
-              showSavePresetModal = true;
-            }}
-            title="Save current layout & effects as a reusable preset"
-          >
-            + Save Current
-          </button>
-        </div>
-
-        <div class="mf-presets-container">
-          <div class="mf-preset-chips" role="group" aria-label="Layout Presets">
-            {#each BUILTIN_PRESETS as p (p.id)}
-              <button
-                class="mf-preset-chip"
-                onclick={() => applyPreset(p)}
-                title="Apply {p.name}"
-              >
-                <span>{p.name}</span>
-              </button>
-            {/each}
-
-            {#each userPresets as p (p.id)}
-              <div class="mf-preset-chip-user">
-                <button
-                  class="mf-preset-chip custom"
-                  onclick={() => applyPreset(p)}
-                  title="Apply custom preset {p.name}"
-                >
-                  <span>★ {p.name}</span>
-                </button>
-                <button
-                  class="mf-preset-del"
-                  onclick={(e) => deletePreset(p.id, e)}
-                  title="Delete preset"
-                  aria-label="Delete preset">×</button
-                >
-              </div>
-            {/each}
-          </div>
-        </div>
-      </section>
-
-      <!-- ═══════════ MODE 1: PHOTO EDITOR PANEL ═══════════ -->
-      {#if activeTab === "editor"}
-        <section class="mf-card" aria-labelledby="lbl-color-adjust">
-          <div class="mf-card-title-row">
-            <h2 class="mf-card-title" id="lbl-color-adjust">
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-              Light & Color Engine
-            </h2>
-            <button class="mf-btn-micro" onclick={resetColorAdjustments}
-              >Reset All</button
-            >
-          </div>
-
-          <!-- Quick Looks -->
-          <div class="mf-control-group">
-            <span class="mf-group-label">Global Color Looks</span>
-            <div class="mf-preset-pill-row">
-              <button
-                class="mf-pill-btn"
-                onclick={() => applyPresetLook("raw-fix")}>✦ RAW Lift</button
-              >
-              <button
-                class="mf-pill-btn"
-                onclick={() => applyPresetLook("vivid")}>Vivid</button
-              >
-              <button
-                class="mf-pill-btn"
-                onclick={() => applyPresetLook("warm")}>Warm</button
-              >
-              <button
-                class="mf-pill-btn"
-                onclick={() => applyPresetLook("moody")}>Moody</button
-              >
-              <button
-                class="mf-pill-btn"
-                onclick={() => applyPresetLook("bw-contrast")}>B&W</button
-              >
-            </div>
-          </div>
-
-          <!-- Exposure Slider -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="slider-exposure" class="mf-slider-label"
-                >Exposure (EV)</label
-              >
-              <div class="mf-num-wrap">
-                <input
-                  id="exposure-num"
-                  type="number"
-                  min="-2"
-                  max="2"
-                  step="0.05"
-                  bind:value={exposure}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">EV</span>
-              </div>
-            </div>
-            <input
-              id="slider-exposure"
-              type="range"
-              min="-2"
-              max="2"
-              step="0.05"
-              bind:value={exposure}
-              aria-label="Exposure EV"
-            />
-          </div>
-
-          <!-- Brightness Slider -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="slider-brightness" class="mf-slider-label"
-                >Brightness</label
-              >
-              <div class="mf-num-wrap">
-                <input
-                  id="brightness-num"
-                  type="number"
-                  min="-100"
-                  max="100"
-                  step="1"
-                  bind:value={brightness}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="slider-brightness"
-              type="range"
-              min="-100"
-              max="100"
-              step="1"
-              bind:value={brightness}
-              aria-label="Brightness"
-            />
-          </div>
-
-          <!-- Contrast Slider -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="slider-contrast" class="mf-slider-label"
-                >Contrast</label
-              >
-              <div class="mf-num-wrap">
-                <input
-                  id="contrast-num"
-                  type="number"
-                  min="-100"
-                  max="100"
-                  step="1"
-                  bind:value={contrast}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="slider-contrast"
-              type="range"
-              min="-100"
-              max="100"
-              step="1"
-              bind:value={contrast}
-              aria-label="Contrast"
-            />
-          </div>
-
-          <!-- Saturation Slider -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="slider-saturation" class="mf-slider-label"
-                >Saturation</label
-              >
-              <div class="mf-num-wrap">
-                <input
-                  id="saturation-num"
-                  type="number"
-                  min="-100"
-                  max="100"
-                  step="1"
-                  bind:value={saturation}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="slider-saturation"
-              type="range"
-              min="-100"
-              max="100"
-              step="1"
-              bind:value={saturation}
-              aria-label="Saturation"
-            />
-          </div>
-
-          <!-- Analog Effects: Film Grain & Soft Bloom (Black Mist) -->
-          <div class="mf-divider"></div>
-          <div class="mf-section-subtitle">Analog Effects</div>
-
-          <!-- Film Grain Slider -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="slider-grain" class="mf-slider-label">Film Grain</label>
-              <div class="mf-num-wrap">
-                <input
-                  id="grain-num"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  bind:value={filmGrain}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="slider-grain"
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              bind:value={filmGrain}
-              aria-label="Film Grain"
-            />
-          </div>
-
-          <!-- Soft Bloom (Black Mist) Slider -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="slider-bloom" class="mf-slider-label">Soft Bloom (Black Mist)</label>
-              <div class="mf-num-wrap">
-                <input
-                  id="bloom-num"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  bind:value={softBloom}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="slider-bloom"
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              bind:value={softBloom}
-              aria-label="Soft Bloom (Black Mist)"
-            />
-          </div>
-
-          <button
-            class="mf-btn mf-btn-ghost full-width"
-            onclick={() => {
-              activeTab = "framing";
-            }}
-            style="margin-top: 6px;"
-          >
-            Proceed to Framing & EXIF →
-          </button>
-        </section>
-
-        <!-- ═══════════ MODE 2: FRAME & EXIF PANEL ═══════════ -->
-      {:else}
-        <!-- Frame & Margins Card -->
-        <section class="mf-card" aria-labelledby="lbl-frame">
-          <div class="mf-card-title-row">
-            <h2 class="mf-card-title" id="lbl-frame">
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  d="M3 4a1 1 0 011-1h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm2 1v10h10V5H5z"
-                />
-              </svg>
-              Frame & Margins
-            </h2>
-            <button class="mf-btn-micro" onclick={resetMargins}>Reset</button>
-          </div>
-
-          <!-- Presets -->
+  <section class="stage" aria-label="Preview">
+    <div class="fit" style:display={processedImage ? "flex" : "none"}>
+      <div class="print" style:--ar={canvasAspect}>
+        <canvas bind:this={canvasEl} aria-label="Preview of {activeItem?.name ?? 'your photo'}"></canvas>
+        {#if dev.softBloom > 0}
           <div
-            class="mf-ratio-grid"
-            role="group"
-            aria-label="Aspect Ratio Presets"
-          >
-            {#each RATIOS as r (r.id)}
-              <button
-                id="ratio-{r.id}"
-                class="mf-ratio-btn"
-                class:active={selectedRatioId === r.id}
-                onclick={() => {
-                  selectedRatioId = r.id;
-                }}
-                aria-pressed={selectedRatioId === r.id}
-              >
-                {r.label}
-              </button>
-            {/each}
-          </div>
+            class="fx-bloom"
+            style:opacity={(dev.softBloom / 100) * 0.85}
+            style:backdrop-filter={`blur(${Math.max(2, Math.round((dev.softBloom / 100) * 10))}px) brightness(1.22)`}
+            aria-hidden="true"
+          ></div>
+        {/if}
+        {#if dev.filmGrain > 0}
+          <div class="fx-grain" style:opacity={(dev.filmGrain / 100) * 0.75} aria-hidden="true"></div>
+        {/if}
+        {#key activeItem?.id}<div class="develop" aria-hidden="true"></div>{/key}
+      </div>
+    </div>
 
-          <!-- Horizontal Margin -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="margin-h" class="mf-slider-label"
-                >Horizontal Margin</label
-              >
-              <div class="mf-num-wrap">
-                <input
-                  id="margin-h-num"
-                  type="number"
-                  min="5"
-                  max="50"
-                  step="1"
-                  bind:value={customMarginH}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="margin-h"
-              type="range"
-              min="5"
-              max="50"
-              step="1"
-              bind:value={customMarginH}
-            />
+    {#if !processedImage}
+      <div class="hero">
+        <div class="fan" aria-hidden="true">
+          <div class="sample s-instant">
+            <span class="sample-photo p-sunset"></span>
+            <span class="sample-cap" style:font-family="Caveat">Kyoto, spring</span>
           </div>
-
-          <!-- Vertical Margin -->
-          <div class="mf-slider-field">
-            <div class="mf-slider-header">
-              <label for="margin-v" class="mf-slider-label"
-                >Vertical Margin</label
-              >
-              <div class="mf-num-wrap">
-                <input
-                  id="margin-v-num"
-                  type="number"
-                  min="5"
-                  max="50"
-                  step="1"
-                  bind:value={customMarginV}
-                  class="mf-num-input"
-                />
-                <span class="mf-unit">%</span>
-              </div>
-            </div>
-            <input
-              id="margin-v"
-              type="range"
-              min="5"
-              max="50"
-              step="1"
-              bind:value={customMarginV}
-            />
+          <div class="sample s-film">
+            <span class="sample-photo p-sea"></span>
+            <span class="sample-cap" style:font-family='"Space Mono"'>X-T5  23mm  ƒ/2</span>
           </div>
-        </section>
+          <div class="sample s-mat">
+            <span class="sample-photo p-forest"></span>
+            <span class="sample-cap" style:font-family='"Cormorant Garamond"'>Fujifilm X-T5</span>
+          </div>
+        </div>
+        <h1>Your photos, beautifully framed.</h1>
+        <p class="lead">
+          Pick a frame, set the light and add your camera details. Ready for Instagram in seconds, and nothing leaves your device.
+        </p>
+        <button class="btn accent big" onclick={() => fileInput?.click()} disabled={isLoading}>
+          {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || "Opening…"}{:else}Choose photos{/if}
+        </button>
+        <p class="fine">or drop them anywhere. JPEG, PNG, WebP and RAW from Sony, Canon, Nikon, Fujifilm and more.</p>
+      </div>
+    {/if}
 
-        <!-- EXIF Typography & Manual Editable Overrides -->
-        <section class="mf-card" aria-labelledby="lbl-exif">
-          <div class="mf-card-title-row">
-            <h2 class="mf-card-title" id="lbl-exif">
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-              EXIF & Typography
-            </h2>
-            <label class="mf-toggle-compact" for="toggle-exif">
-              <span class="mf-switch" class:on={showExif} aria-hidden="true">
-                <span class="mf-switch-thumb"></span>
-              </span>
-              <input
-                id="toggle-exif"
-                type="checkbox"
-                bind:checked={showExif}
-                role="switch"
-                class="sr-only"
-              />
+    {#if isLoading && filesList.length > 0}
+      <p class="toast glass" role="status"><span class="spinner" aria-hidden="true"></span>{loadingStatus}</p>
+    {/if}
+    {#if loadError}
+      <p class="alert glass" role="alert">
+        {loadError}
+        <button onclick={() => (loadError = "")} aria-label="Dismiss">×</button>
+      </p>
+    {/if}
+  </section>
+
+  {#if filesList.length > 0}
+    <nav class="strip glass" aria-label="Your photos">
+      <ol>
+        {#each filesList as item, i (item.id)}
+          <li class="frame" class:active={activeImageIndex === i}>
+            <button
+              class="frame-pick"
+              onclick={() => setActiveImage(i)}
+              aria-current={activeImageIndex === i ? "true" : undefined}
+              aria-label="Show {item.name}"
+            >
+              <img src={item.thumbUrl} alt="" />
+              {#if item.isRaw}<span class="frame-raw">RAW</span>{/if}
+            </button>
+            <label class="frame-sel" title="Include in batch export">
+              <input type="checkbox" bind:checked={item.selected} />
+              <span class="sr-only">Include {item.name} in batch export</span>
             </label>
-          </div>
+            <button class="frame-del" onclick={(e) => removeImage(i, e)} aria-label="Remove {item.name}">×</button>
+          </li>
+        {/each}
+        <li>
+          <button class="frame-add" onclick={() => fileInput?.click()} aria-label="Add photos">+</button>
+        </li>
+      </ol>
+      {#if filesList.length > 1}<p class="strip-note">{selectedCount} of {filesList.length} in batch</p>{/if}
+    </nav>
 
-          {#if showExif}
-            <!-- Font Family Selector -->
-            <div class="mf-control-group">
-              <label for="select-font-family" class="mf-group-label"
-                >Font Family</label
-              >
-              <select
-                id="select-font-family"
-                class="mf-select-input"
-                bind:value={selectedFontId}
-              >
-                {#each SYSTEM_FONTS as f (f.id)}
-                  <option value={f.id}>{f.label}</option>
-                {/each}
-              </select>
-            </div>
+    <aside class="panel glass" aria-label="Controls">
+      <div class="seg modes" role="group" aria-label="Mode">
+        <button aria-pressed={activeTab === "editor"} onclick={() => (activeTab = "editor")}>Edit</button>
+        <button aria-pressed={activeTab === "framing"} onclick={() => (activeTab = "framing")}>Frame</button>
+      </div>
 
-            <!-- Font Size -->
-            <div class="mf-control-group">
-              <div class="mf-group-header">
-                <label for="manual-font-size" class="mf-group-label"
-                  >Font Size</label
-                >
-                <button
-                  class="mf-btn-micro"
-                  class:active={autoFontSize}
-                  onclick={() => {
-                    autoFontSize = !autoFontSize;
-                  }}
-                >
-                  {autoFontSize ? "✓ Auto-Scaled" : "Manual Override"}
+      <div class="tabs" class:many={TOOLS[activeTab].length > 4} role="group" aria-label="Tools">
+        {#each TOOLS[activeTab] as [id, name] (id)}
+          <button class="tab" aria-pressed={activeTool[activeTab] === id} onclick={() => (activeTool[activeTab] = id)}>
+            {@render icon(id)}<span>{name}</span>
+          </button>
+        {/each}
+      </div>
+
+      <div class="body">
+        {#if activeTab === "editor"}
+          {@const tool = activeTool.editor}
+          {#if histo}<Histogram bins={histo} />{/if}
+          {#if !canDevelop}
+            <p class="hint">This device can't run the full editor, so only exposure, contrast and saturation are applied.</p>
+          {/if}
+          {#if tool === "looks"}
+            <div class="looks">
+              {#each LOOKS as look (look.id)}
+                <button class="look" aria-pressed={isLookActive(look)} onclick={() => applyLook(look)}>
+                  {#if lookThumbs[look.id]}
+                    <img src={lookThumbs[look.id]} alt="" />
+                  {:else}
+                    <img src={activeItem?.thumbUrl} alt="" style:filter={cssFilterFor(look.params)} />
+                  {/if}
+                  <span>{look.name}</span>
                 </button>
-              </div>
-
-              {#if autoFontSize}
-                <div class="mf-auto-font-badge">
-                  <span
-                    >Dynamic Weight: {Math.round(
-                      dynamicScaleFactor * 100,
-                    )}%</span
-                  >
-                  <span class="mf-badge-detail"
-                    >({selectedExifCount}/6 properties)</span
-                  >
+              {/each}
+            </div>
+            <button class="btn ghost" onclick={resetColorAdjustments}>Reset all edits</button>
+          {:else if tool === "light"}
+            <div class="stack">
+              <Dial id="d-exposure" label="Exposure" bind:value={dev.exposure} min={-3} max={3} step={0.05} unit="EV" reset={0} signed />
+              <Dial id="d-contrast" label="Contrast" bind:value={dev.contrast} min={-100} max={100} reset={0} signed />
+              <Dial id="d-highlights" label="Highlights" bind:value={dev.highlights} min={-100} max={100} reset={0} signed />
+              <Dial id="d-shadows" label="Shadows" bind:value={dev.shadows} min={-100} max={100} reset={0} signed />
+              <Dial id="d-whites" label="Whites" bind:value={dev.whites} min={-100} max={100} reset={0} signed />
+              <Dial id="d-blacks" label="Blacks" bind:value={dev.blacks} min={-100} max={100} reset={0} signed />
+            </div>
+          {:else if tool === "color"}
+            <div class="stack">
+              <Dial id="d-temp" label="Temperature" bind:value={dev.temperature} min={-100} max={100} reset={0} signed track="linear-gradient(to right, #5d9bff, #ffbe55)" />
+              <Dial id="d-tint" label="Tint" bind:value={dev.tint} min={-100} max={100} reset={0} signed track="linear-gradient(to right, #53d36b, #e45ce0)" />
+              <Dial id="d-vibrance" label="Vibrance" bind:value={dev.vibrance} min={-100} max={100} reset={0} signed />
+              <Dial id="d-saturation" label="Saturation" bind:value={dev.saturation} min={-100} max={100} reset={0} signed />
+              <p class="hint">Vibrance boosts muted colors and protects skin tones. Saturation moves every color equally.</p>
+            </div>
+          {:else if tool === "film"}
+            <div class="stack">
+              <Dial id="d-grain" label="Film grain" bind:value={dev.filmGrain} unit="%" reset={0} />
+              <Dial id="d-bloom" label="Soft bloom" bind:value={dev.softBloom} unit="%" reset={0} />
+              <p class="hint">Bloom makes highlights glow like a mist filter. The preview is an approximation; full grain and bloom are rendered when you export.</p>
+            </div>
+          {/if}
+        {:else}
+          {@const tool = activeTool.framing}
+          {#if tool === "templates"}
+            <div class="templates">
+              {#each [...BUILTIN_PRESETS, ...userPresets] as p (p.id)}
+                {@const r = RATIOS.find((x) => x.id === p.selectedRatioId)}
+                {@const f = allFonts.find((x) => x.id === p.selectedFontId) || SYSTEM_FONTS[0]}
+                <div class="template">
+                  <button onclick={() => applyPreset(p)} aria-label="Apply template {p.name}">
+                    <span
+                      class="template-mini"
+                      style:background={p.backgroundColor}
+                      style:color={getContrastingColor(p.backgroundColor)}
+                      style:aspect-ratio={r?.w ? `${r.w} / ${r.h}` : p.captionSpace > 16 ? "4 / 5" : "5 / 5.4"}
+                      style:padding="{Math.max(6, p.customMarginH)}%"
+                    >
+                      <span class="template-photo"></span>
+                      <span class="template-cap" style:font-family={f.css} style:text-align={p.textAlign}>Aa Camera</span>
+                    </span>
+                    <span class="template-name">{p.name}</span>
+                  </button>
+                  {#if userPresets.includes(p)}
+                    <button class="mini-del" onclick={(e) => deletePreset(p.id, e)} aria-label="Delete template {p.name}">×</button>
+                  {/if}
                 </div>
-              {:else}
-                <div class="mf-slider-field">
-                  <div class="mf-slider-header">
-                    <span class="mf-slider-label">Manual Size (px)</span>
-                    <div class="mf-num-wrap">
-                      <input
-                        id="manual-font-num"
-                        type="number"
-                        min="16"
-                        max="120"
-                        step="1"
-                        bind:value={manualFontSize}
-                        class="mf-num-input"
-                      />
-                      <span class="mf-unit">px</span>
-                    </div>
+              {/each}
+            </div>
+            <button
+              class="btn ghost"
+              onclick={() => {
+                newPresetName = "";
+                showSavePresetModal = true;
+              }}>Save current settings as a template</button
+            >
+          {:else if tool === "ratio"}
+            <div class="ratios">
+              {#each RATIOS as r (r.id)}
+                <button class="ratio" aria-pressed={selectedRatioId === r.id} onclick={() => (selectedRatioId = r.id)}>
+                  <span class="ratio-glyph" class:loose={!r.w} style:aspect-ratio={r.w ? `${r.w} / ${r.h}` : r.id === "orig" ? "3 / 3.6" : "3 / 2.4"}></span>
+                  <span>{r.label}</span>
+                </button>
+              {/each}
+            </div>
+          {:else if tool === "border"}
+            <div class="stack">
+              <Dial id="d-margin-h" label="Sides" bind:value={customMarginH} min={0} max={40} unit="%" reset={8} />
+              <Dial id="d-margin-v" label="Top and bottom" bind:value={customMarginV} min={0} max={40} unit="%" reset={8} />
+              {#if selectedRatioId === "orig"}
+                <Dial id="d-caption-space" label="Caption space" bind:value={captionSpace} min={0} max={40} unit="%" reset={12} />
+              {/if}
+              <p class="hint">The border under the caption always grows enough to fit it.</p>
+            </div>
+          {:else if tool === "colors"}
+            <div class="stack">
+              <div>
+                <p class="label">Border color</p>
+                <div class="swatches">
+                  {#each QUICK_BACKGROUNDS as c (c)}
+                    <button class="swatch" style:background={c} aria-pressed={backgroundColor.toLowerCase() === c} aria-label="Border color {c}" onclick={() => (backgroundColor = c)}></button>
+                  {/each}
+                  <label class="swatch swatch-custom" title="Pick any color">
+                    <input type="color" bind:value={backgroundColor} />
+                    <span class="sr-only">Custom border color</span>
+                  </label>
+                </div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" role="switch" bind:checked={autoContrast} />
+                <span class="switch-track" aria-hidden="true"></span>
+                Pick text color automatically
+              </label>
+              {#if !autoContrast}
+                <label class="color-row">
+                  <input type="color" bind:value={textColor} />
+                  Text color <span class="hint">{textColor}</span>
+                </label>
+              {/if}
+              {#if palettes.length > 0}
+                <div>
+                  <p class="label">Saved pairs</p>
+                  <div class="swatches">
+                    {#each palettes as pal, i (i)}
+                      <span class="pair">
+                        <button class="swatch" style:background={pal.bg} onclick={() => applyPalette(pal)} aria-label="Use saved pair {i + 1}">
+                          <span class="pair-dot" style:background={pal.text}></span>
+                        </button>
+                        <button class="mini-del" onclick={() => deletePalette(i)} aria-label="Delete saved pair {i + 1}">×</button>
+                      </span>
+                    {/each}
                   </div>
-                  <input
-                    id="manual-font-size"
-                    type="range"
-                    min="16"
-                    max="120"
-                    step="1"
-                    bind:value={manualFontSize}
-                  />
+                </div>
+              {/if}
+              <button class="btn ghost" onclick={savePalette}>Save this color pair</button>
+            </div>
+          {:else if tool === "caption"}
+            <div class="stack">
+              <label class="switch">
+                <input type="checkbox" role="switch" bind:checked={showExif} />
+                <span class="switch-track" aria-hidden="true"></span>
+                Show camera details
+              </label>
+              {#if showExif}
+                {#if activeItem}
+                  <div class="fields">
+                    {#each EXIF_FIELDS as [key, name, example] (key)}
+                      <div class="field">
+                        <label class="field-check">
+                          <input type="checkbox" bind:checked={exifDisplay[key]} />
+                          {name}
+                        </label>
+                        <input class="text" type="text" bind:value={activeItem.exifOverride[key]} placeholder={example} aria-label={name} disabled={!exifDisplay[key]} />
+                      </div>
+                    {/each}
+                  </div>
+                  <p class="hint">Missing details? Type them in. Changes apply to this photo only.</p>
+                {/if}
+
+                <div>
+                  <p class="label">Font</p>
+                  <div class="fonts">
+                    {#each allFonts as f (f.id)}
+                      <button class="font" aria-pressed={selectedFontId === f.id} onclick={() => (selectedFontId = f.id)}>
+                        <span class="font-aa" style:font-family={f.css}>Aa</span>
+                        <span class="font-name">{f.label}</span>
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+                <div class="font-more">
+                  {#if canBrowseLocalFonts}
+                    {#if localFamilies.length}
+                      <label class="label" for="local-font">Fonts on this computer</label>
+                      <input
+                        id="local-font"
+                        class="text"
+                        list="local-font-list"
+                        placeholder="Type to search {localFamilies.length} fonts"
+                        onchange={(e) => useLocalFont(e.currentTarget.value)}
+                      />
+                      <datalist id="local-font-list">
+                        {#each localFamilies as fam (fam)}<option value={fam}></option>{/each}
+                      </datalist>
+                    {:else}
+                      <button class="btn ghost" onclick={browseLocalFonts}>Use a font from this computer</button>
+                    {/if}
+                  {/if}
+                  <label class="btn ghost upload-font">
+                    Upload a font file
+                    <input type="file" accept=".ttf,.otf,.woff,.woff2" onchange={onFontFile} class="sr-only" />
+                  </label>
+                  {#if fontError}<p class="hint warn" role="alert">{fontError}</p>{/if}
+                </div>
+
+                <div>
+                  <p class="label">Size</p>
+                  <div class="seg">
+                    <button aria-pressed={autoFontSize} onclick={() => (autoFontSize = true)}>Fit automatically</button>
+                    <button aria-pressed={!autoFontSize} onclick={() => (autoFontSize = false)}>Set by hand</button>
+                  </div>
+                </div>
+                {#if !autoFontSize}
+                  <Dial id="d-font" label="Text size" bind:value={manualFontSize} min={10} max={80} reset={24} />
+                {/if}
+                <div>
+                  <p class="label">Alignment</p>
+                  <div class="seg">
+                    <button aria-pressed={textAlign === "left"} onclick={() => setAlignment("left")}>Left</button>
+                    <button aria-pressed={textAlign === "center"} onclick={() => setAlignment("center")}>Center</button>
+                    <button aria-pressed={textAlign === "right"} onclick={() => setAlignment("right")}>Right</button>
+                  </div>
+                </div>
+                <div>
+                  <p class="label">Place</p>
+                  <div class="seg">
+                    <button aria-pressed={textZone === "bottom"} onclick={() => setZone("bottom")}>Below photo</button>
+                    <button aria-pressed={textZone === "top"} onclick={() => setZone("top")}>Above photo</button>
+                  </div>
                 </div>
               {/if}
             </div>
-
-            <!-- Manual Editable EXIF Overrides (Per-Image) -->
-            {#if activeItem}
-              <div class="mf-control-group">
-                <div class="mf-group-header">
-                  <span class="mf-group-label">Editable EXIF Metadata</span>
-                  <span class="mf-edit-hint">Instant Canvas Sync</span>
-                </div>
-
-                <div class="mf-exif-inputs-list">
-                  <div class="mf-input-row">
-                    <label class="mf-input-lbl">
-                      <input
-                        type="checkbox"
-                        bind:checked={exifDisplay.model}
-                        class="mf-checkbox-mini"
-                      />
-                      Model
-                    </label>
-                    <input
-                      type="text"
-                      bind:value={activeItem.exifOverride.model}
-                      placeholder="e.g. Sony A7 IV"
-                      class="mf-text-input"
-                    />
-                  </div>
-
-                  <div class="mf-input-row">
-                    <label class="mf-input-lbl">
-                      <input
-                        type="checkbox"
-                        bind:checked={exifDisplay.lens}
-                        class="mf-checkbox-mini"
-                      />
-                      Lens
-                    </label>
-                    <input
-                      type="text"
-                      bind:value={activeItem.exifOverride.lens}
-                      placeholder="e.g. Helios 44-2 58mm f/2"
-                      class="mf-text-input"
-                    />
-                  </div>
-
-                  <div class="mf-input-grid-2">
-                    <div class="mf-input-row">
-                      <label class="mf-input-lbl">
-                        <input
-                          type="checkbox"
-                          bind:checked={exifDisplay.focalLength}
-                          class="mf-checkbox-mini"
-                        />
-                        Focal
-                      </label>
-                      <input
-                        type="text"
-                        bind:value={activeItem.exifOverride.focalLength}
-                        placeholder="58mm"
-                        class="mf-text-input"
-                      />
-                    </div>
-                    <div class="mf-input-row">
-                      <label class="mf-input-lbl">
-                        <input
-                          type="checkbox"
-                          bind:checked={exifDisplay.aperture}
-                          class="mf-checkbox-mini"
-                        />
-                        Aperture
-                      </label>
-                      <input
-                        type="text"
-                        bind:value={activeItem.exifOverride.aperture}
-                        placeholder="ƒ/2.0"
-                        class="mf-text-input"
-                      />
-                    </div>
-                  </div>
-
-                  <div class="mf-input-grid-2">
-                    <div class="mf-input-row">
-                      <label class="mf-input-lbl">
-                        <input
-                          type="checkbox"
-                          bind:checked={exifDisplay.shutterSpeed}
-                          class="mf-checkbox-mini"
-                        />
-                        Shutter
-                      </label>
-                      <input
-                        type="text"
-                        bind:value={activeItem.exifOverride.shutterSpeed}
-                        placeholder="1/500s"
-                        class="mf-text-input"
-                      />
-                    </div>
-                    <div class="mf-input-row">
-                      <label class="mf-input-lbl">
-                        <input
-                          type="checkbox"
-                          bind:checked={exifDisplay.iso}
-                          class="mf-checkbox-mini"
-                        />
-                        ISO
-                      </label>
-                      <input
-                        type="text"
-                        bind:value={activeItem.exifOverride.iso}
-                        placeholder="ISO 400"
-                        class="mf-text-input"
-                      />
-                    </div>
-                  </div>
-                </div>
+          {:else if tool === "position"}
+            {#if showExif}
+              <div class="stack">
+                <Dial id="d-text-x" label="Across the photo" bind:value={textPosX} unit="%" />
+                <Dial id="d-text-y" label="Distance from photo" bind:value={textPosY} unit="%" reset={50} />
+                <p class="hint">The caption always stays inside the frame and never covers your photo.</p>
+                <button class="btn ghost" onclick={resetTextPosition}>Reset caption position</button>
               </div>
+            {:else}
+              <p class="hint">Turn on camera details under Caption to place them.</p>
             {/if}
-
-            <!-- Alignment & Zone Selection -->
-            <div class="mf-control-group">
-              <span class="mf-group-label">Alignment & Margin Zone</span>
-              <div
-                class="mf-align-group"
-                role="group"
-                aria-label="Text Alignment"
-              >
-                <button
-                  class="mf-align-btn"
-                  class:active={textAlign === "left"}
-                  onclick={() => setAlignment("left")}>Left</button
-                >
-                <button
-                  class="mf-align-btn"
-                  class:active={textAlign === "center"}
-                  onclick={() => setAlignment("center")}>Center</button
-                >
-                <button
-                  class="mf-align-btn"
-                  class:active={textAlign === "right"}
-                  onclick={() => setAlignment("right")}>Right</button
-                >
-              </div>
-
-              <div class="mf-zone-group" role="group" aria-label="Margin Zone">
-                <button
-                  class="mf-zone-btn"
-                  class:active={textZone === "bottom"}
-                  onclick={() => setZone("bottom")}>Bottom Margin</button
-                >
-                <button
-                  class="mf-zone-btn"
-                  class:active={textZone === "top"}
-                  onclick={() => setZone("top")}>Top Margin</button
-                >
-              </div>
-            </div>
-
-            <!-- Position Sliders (Zero Overlap) -->
-            <div class="mf-control-group">
-              <div class="mf-card-title-row">
-                <span class="mf-group-label"
-                  >Position (No-Overlap Constrained)</span
-                >
-                <button class="mf-btn-micro" onclick={resetTextPosition}
-                  >Reset Pos</button
-                >
-              </div>
-
-              <div class="mf-slider-field">
-                <div class="mf-slider-header">
-                  <label for="pos-x" class="mf-slider-label">X Position</label>
-                  <div class="mf-num-wrap">
-                    <input
-                      id="pos-x-num"
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      bind:value={textPosX}
-                      class="mf-num-input"
-                    />
-                    <span class="mf-unit">%</span>
-                  </div>
-                </div>
-                <input
-                  id="pos-x"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  bind:value={textPosX}
-                />
-              </div>
-
-              <div class="mf-slider-field">
-                <div class="mf-slider-header">
-                  <label for="pos-y" class="mf-slider-label">
-                    Y Position <span class="mf-range-hint"
-                      >({ySliderMin}% – {ySliderMax}%)</span
-                    >
-                  </label>
-                  <div class="mf-num-wrap">
-                    <input
-                      id="pos-y-num"
-                      type="number"
-                      min={ySliderMin}
-                      max={ySliderMax}
-                      step="1"
-                      bind:value={textPosY}
-                      class="mf-num-input"
-                    />
-                    <span class="mf-unit">%</span>
-                  </div>
-                </div>
-                <input
-                  id="pos-y"
-                  type="range"
-                  min={ySliderMin}
-                  max={ySliderMax}
-                  step="1"
-                  bind:value={textPosY}
-                />
-              </div>
-            </div>
-          {/if}
-        </section>
-
-        <!-- Colors & Auto-Contrast Card -->
-        <section class="mf-card" aria-labelledby="lbl-colors">
-          <h2 class="mf-card-title" id="lbl-colors">
-            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path
-                d="M2 10a8 8 0 1116 0 4 4 0 01-8 4 2 2 0 00-2 2 8 8 0 01-6-6zm14-2a6 6 0 10-12 0c0 1.09.29 2.12.8 3A4 4 0 0110 9a4 4 0 014 3.47A6 6 0 0016 8z"
-              />
-            </svg>
-            Colors & Contrast
-          </h2>
-
-          <label class="mf-checkbox-label mf-auto-contrast-row">
-            <input
-              type="checkbox"
-              bind:checked={autoContrast}
-              class="mf-checkbox"
-            />
-            <span class="mf-auto-contrast-text">
-              Smart Auto-Contrast
-              <span class="mf-lum-indicator">
-                (Luminance: {Math.round(
-                  calculateLuminance(backgroundColor) * 100,
-                )}%)
-              </span>
-            </span>
-          </label>
-
-          <div class="mf-color-row">
-            <div class="mf-color-field">
-              <label for="color-bg" class="mf-color-field-label"
-                >Background</label
-              >
-              <div class="mf-color-picker-wrap">
-                <span
-                  class="mf-color-swatch"
-                  style="background:{backgroundColor}"
-                ></span>
-                <input
-                  id="color-bg"
-                  type="color"
-                  bind:value={backgroundColor}
-                  title="Background color"
-                />
-              </div>
-              <code class="mf-color-hex">{backgroundColor}</code>
-            </div>
-
-            <div class="mf-color-field" class:disabled={autoContrast}>
-              <label for="color-text" class="mf-color-field-label">
-                EXIF Text {autoContrast ? "(Auto)" : ""}
-              </label>
-              <div class="mf-color-picker-wrap">
-                <span class="mf-color-swatch" style="background:{textColor}"
-                ></span>
-                <input
-                  id="color-text"
-                  type="color"
-                  bind:value={textColor}
-                  disabled={autoContrast}
-                  title="EXIF text color"
-                />
-              </div>
-              <code class="mf-color-hex">{textColor}</code>
-            </div>
-          </div>
-
-          <button
-            id="btn-save-palette"
-            class="mf-btn mf-btn-ghost full-width"
-            onclick={savePalette}
-          >
-            Save Palette
-          </button>
-
-          {#if palettes.length > 0}
-            <div class="mf-palette-row" role="list">
-              {#each palettes as pal, i (i)}
-                <div class="mf-pal-item" role="listitem">
-                  <button
-                    class="mf-pal-swatch"
-                    style="background:{pal.bg}; --text-dot:{pal.text}"
-                    onclick={() => applyPalette(pal)}
-                    title="Apply: bg {pal.bg} · text {pal.text}"
-                  >
-                    <span class="pal-dot" style="background:{pal.text}"></span>
-                  </button>
-                  <button
-                    class="mf-pal-del"
-                    onclick={() => deletePalette(i)}
-                    title="Remove">×</button
-                  >
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </section>
-
-        <!-- Personal Logo & Watermark Card -->
-        <section class="mf-card" aria-labelledby="lbl-logo">
-          <div class="mf-card-title-row">
-            <h2 class="mf-card-title" id="lbl-logo">
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd" />
-              </svg>
-              Logo & Watermark
-            </h2>
+          {:else if tool === "logo"}
             {#if logoImage}
-              <button class="mf-btn-micro danger" onclick={removeLogo}>Remove</button>
-            {/if}
-          </div>
-
-          {#if logoImage}
-            <div class="mf-logo-active-box">
-              <div class="mf-logo-preview-thumb">
-                <img src={logoImage.src} alt="Uploaded logo" />
-              </div>
-              <div class="mf-logo-meta">
-                <span class="mf-logo-name">{logoName || "Custom Watermark"}</span>
-                <span class="mf-logo-dims">{logoImage.naturalWidth || logoImage.width} × {logoImage.naturalHeight || logoImage.height} px</span>
-              </div>
-            </div>
-
-            <!-- Quick Placement Shortcuts -->
-            <div class="mf-control-group">
-              <span class="mf-group-label">Quick Placement</span>
-              <div class="mf-preset-pill-row">
-                <button class="mf-pill-btn" onclick={() => setLogoPreset("bottom-right")}>Bottom-R</button>
-                <button class="mf-pill-btn" onclick={() => setLogoPreset("bottom-left")}>Bottom-L</button>
-                <button class="mf-pill-btn" onclick={() => setLogoPreset("top-right")}>Top-R</button>
-                <button class="mf-pill-btn" onclick={() => setLogoPreset("top-left")}>Top-L</button>
-                <button class="mf-pill-btn" onclick={() => setLogoPreset("center")}>Center</button>
-              </div>
-            </div>
-
-            <!-- Scale Slider -->
-            <div class="mf-slider-field">
-              <div class="mf-slider-header">
-                <label for="logo-scale" class="mf-slider-label">Scale (Size)</label>
-                <div class="mf-num-wrap">
-                  <input
-                    id="logo-scale-num"
-                    type="number"
-                    min="3"
-                    max="45"
-                    step="1"
-                    bind:value={logoScale}
-                    class="mf-num-input"
-                  />
-                  <span class="mf-unit">%</span>
+              <div class="stack">
+                <div class="logo-row">
+                  <img src={logoImage.src} alt="" />
+                  <span class="logo-name">{logoName || "Your logo"}</span>
+                  <button class="btn ghost" onclick={removeLogo}>Remove</button>
                 </div>
-              </div>
-              <input
-                id="logo-scale"
-                type="range"
-                min="3"
-                max="45"
-                step="1"
-                bind:value={logoScale}
-              />
-            </div>
-
-            <!-- Opacity Slider -->
-            <div class="mf-slider-field">
-              <div class="mf-slider-header">
-                <label for="logo-opacity" class="mf-slider-label">Opacity</label>
-                <div class="mf-num-wrap">
-                  <input
-                    id="logo-opacity-num"
-                    type="number"
-                    min="5"
-                    max="100"
-                    step="1"
-                    bind:value={logoOpacity}
-                    class="mf-num-input"
-                  />
-                  <span class="mf-unit">%</span>
+                <div>
+                  <p class="label">Snap to</p>
+                  <div class="seg wrap">
+                    <button onclick={() => setLogoPreset("top-left")}>Top left</button>
+                    <button onclick={() => setLogoPreset("top-right")}>Top right</button>
+                    <button onclick={() => setLogoPreset("center")}>Center</button>
+                    <button onclick={() => setLogoPreset("bottom-left")}>Bottom left</button>
+                    <button onclick={() => setLogoPreset("bottom-right")}>Bottom right</button>
+                  </div>
                 </div>
+                <Dial id="d-logo-scale" label="Size" bind:value={logoScale} min={3} max={45} unit="%" reset={12} />
+                <Dial id="d-logo-opacity" label="Opacity" bind:value={logoOpacity} min={5} max={100} unit="%" reset={85} />
+                <Dial id="d-logo-x" label="Across" bind:value={logoPosX} unit="%" />
+                <Dial id="d-logo-y" label="Up and down" bind:value={logoPosY} unit="%" />
               </div>
-              <input
-                id="logo-opacity"
-                type="range"
-                min="5"
-                max="100"
-                step="1"
-                bind:value={logoOpacity}
-              />
-            </div>
-
-            <!-- X Position Slider -->
-            <div class="mf-slider-field">
-              <div class="mf-slider-header">
-                <label for="logo-pos-x" class="mf-slider-label">X Position</label>
-                <div class="mf-num-wrap">
-                  <input
-                    id="logo-pos-x-num"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    bind:value={logoPosX}
-                    class="mf-num-input"
-                  />
-                  <span class="mf-unit">%</span>
-                </div>
-              </div>
-              <input
-                id="logo-pos-x"
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                bind:value={logoPosX}
-              />
-            </div>
-
-            <!-- Y Position Slider -->
-            <div class="mf-slider-field">
-              <div class="mf-slider-header">
-                <label for="logo-pos-y" class="mf-slider-label">Y Position</label>
-                <div class="mf-num-wrap">
-                  <input
-                    id="logo-pos-y-num"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    bind:value={logoPosY}
-                    class="mf-num-input"
-                  />
-                  <span class="mf-unit">%</span>
-                </div>
-              </div>
-              <input
-                id="logo-pos-y"
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                bind:value={logoPosY}
-              />
-            </div>
-          {:else}
-            <!-- Logo Upload Trigger -->
-            <div class="mf-logo-drop">
-              <label for="mf-logo-input" class="mf-logo-upload-btn">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width: 22px; height: 22px; color: var(--accent-light);">
-                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="2" x2="12" y2="15"/>
-                </svg>
-                <span>Upload Logo / Watermark</span>
-                <span class="mf-logo-subtext">PNG, SVG, or WebP with transparency</span>
+            {:else}
+              <label class="upload">
+                <span class="upload-title">Add your logo or signature</span>
+                <span class="hint">A PNG or SVG with a transparent background works best.</span>
+                <input type="file" accept=".png,.svg,.webp,.jpg,.jpeg" onchange={onLogoInput} class="sr-only" />
               </label>
-              <input
-                id="mf-logo-input"
-                type="file"
-                accept=".png,.svg,.webp,.jpg,.jpeg"
-                onchange={onLogoInput}
-                class="sr-only"
-              />
-            </div>
+            {/if}
           {/if}
-        </section>
-      {/if}
-    </aside>
-
-    <!-- ════════════════════ RIGHT: Live Preview & Filmstrip ════════════════ -->
-    <section class="mf-main" aria-label="Preview Dashboard">
-      <div class="mf-preview-card">
-        <!-- Top Bar with Mode Context & Resolution -->
-        <div class="mf-card-header">
-          <div class="mf-header-title-wrap">
-            <h2 class="mf-card-title">
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                <path
-                  fill-rule="evenodd"
-                  d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-              Live Preview
-            </h2>
-            <span class="mf-mode-tag">
-              {activeTab === "editor"
-                ? "Photo Editor Mode"
-                : "Framed & EXIF Mode"}
-            </span>
-          </div>
-
-          <div class="mf-card-header-right">
-            {#if processedImage && canvasDisplayWidth}
-              <span class="mf-canvas-dims">
-                {canvasDisplayWidth} × {canvasDisplayHeight} px
-              </span>
-            {/if}
-          </div>
-        </div>
-
-        <!-- Viewport (Proxy Live Canvas with GPU-Accelerated Overlays) -->
-        <div class="mf-preview-viewport" id="preview-viewport">
-          <div
-            class="mf-canvas-container"
-            style:display={processedImage ? "flex" : "none"}
-            style:aspect-ratio={canvasEl && canvasEl.height > 0 ? `${canvasEl.width} / ${canvasEl.height}` : "auto"}
-          >
-            <canvas
-              bind:this={canvasEl}
-              id="mf-render-canvas"
-              class="mf-preview-canvas"
-              aria-label="Framed Live Preview"
-            ></canvas>
-
-            <!-- GPU-Accelerated Live Preview Soft Bloom (Zero JS Pixel Math) -->
-            {#if softBloom > 0}
-              <div
-                class="mf-live-bloom-overlay"
-                style:opacity={(softBloom / 100) * 0.85}
-                style:filter={`blur(${Math.max(2, Math.round((softBloom / 100) * 12))}px)`}
-                style:backdrop-filter={`blur(${Math.max(2, Math.round((softBloom / 100) * 10))}px) brightness(1.22)`}
-                aria-hidden="true"
-              ></div>
-            {/if}
-
-            <!-- GPU-Accelerated Live Preview Film Grain (Zero JS Pixel Math) -->
-            {#if filmGrain > 0}
-              <div
-                class="mf-live-grain-overlay"
-                style:opacity={(filmGrain / 100) * 0.75}
-                aria-hidden="true"
-              ></div>
-            {/if}
-          </div>
-          {#if !processedImage}
-            <div class="mf-preview-empty">
-              <svg
-                viewBox="0 0 64 64"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.1"
-                aria-hidden="true"
-              >
-                <rect x="8" y="8" width="48" height="48" rx="6" />
-                <circle cx="22" cy="24" r="5" />
-                <path d="M8 44 l14-14 8 8 10-12 16 18" />
-              </svg>
-              <p>Drop photos or RAW files (.ARW, .CR2, .DNG) to start</p>
-            </div>
-          {/if}
-        </div>
-
-        <!-- ─── Horizontal Filmstrip Gallery ──────────────────────────────── -->
-        {#if filesList.length > 0}
-          <div class="mf-filmstrip-bar" aria-label="Loaded Photos Gallery">
-            <div class="mf-filmstrip-track">
-              {#each filesList as item, i (item.id)}
-                <div
-                  class="mf-filmstrip-item"
-                  class:active={activeImageIndex === i}
-                  role="button"
-                  tabindex="0"
-                  onclick={() => setActiveImage(i)}
-                  onkeydown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") setActiveImage(i);
-                  }}
-                  title={item.name}
-                >
-                  <img
-                    src={item.thumbUrl}
-                    alt={item.name}
-                    class="mf-filmstrip-thumb"
-                  />
-                  <span class="mf-filmstrip-num">{i + 1}</span>
-                  {#if item.isRaw}
-                    <span class="mf-filmstrip-raw-tag">RAW</span>
-                  {/if}
-                  <button
-                    class="mf-filmstrip-del"
-                    onclick={(e) => removeImage(i, e)}
-                    title="Remove from batch"
-                    aria-label="Remove image">×</button
-                  >
-                </div>
-              {/each}
-
-              <!-- Add More Button inside filmstrip -->
-              <label
-                for="mf-file-input"
-                class="mf-filmstrip-add"
-                title="Add more photos to batch"
-              >
-                <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path
-                    fill-rule="evenodd"
-                    d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
-                    clip-rule="evenodd"
-                  />
-                </svg>
-                <span>Add</span>
-              </label>
-            </div>
-          </div>
         {/if}
-
-        <!-- ─── Bottom Download & Batch Export Bar ────────────────────────── -->
-        <div class="mf-download-bar">
-          <div class="mf-quality-wrap">
-            <label for="quality-range" class="mf-quality-label">
-              Quality
-              <strong>{Math.round(jpegQuality * 100)}%</strong>
-            </label>
-            <input
-              id="quality-range"
-              type="range"
-              min="0.5"
-              max="1"
-              step="0.01"
-              bind:value={jpegQuality}
-            />
-          </div>
-
-          <!-- Single Download Button -->
-          <button
-            id="btn-download"
-            class="mf-btn mf-btn-primary"
-            onclick={() => downloadImage("framed")}
-            disabled={!processedImage || isDownloading || isBatchExporting}
-            title="Download active framed image"
-          >
-            {#if isDownloading}
-              <span class="mf-spinner-sm" aria-hidden="true"></span>
-              Exporting…
-            {:else}
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-              Download JPEG
-            {/if}
-          </button>
-
-          <!-- Batch Export Button (JSZip) -->
-          <button
-            id="btn-batch-export"
-            class="mf-btn mf-btn-accent"
-            onclick={exportBatch}
-            disabled={filesList.length === 0 ||
-              isBatchExporting ||
-              isDownloading}
-            title="Export all loaded photos framed into a single .zip file"
-          >
-            {#if isBatchExporting}
-              <span class="mf-spinner-sm" aria-hidden="true"></span>
-              Batch ({batchProgress.current}/{batchProgress.total})
-            {:else}
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-              Batch Export All ({filesList.length}) (.zip)
-            {/if}
-          </button>
-
-          {#if activeTab === "editor"}
-            <button
-              id="btn-download-edited"
-              class="mf-btn mf-btn-ghost"
-              onclick={() => downloadImage("edited")}
-              disabled={!processedImage || isDownloading || isBatchExporting}
-              title="Export color-adjusted photo without frame"
-            >
-              Export Unframed
-            </button>
-          {/if}
-
-          {#if downloadStatus}
-            <span class="mf-dl-status">{downloadStatus}</span>
-          {/if}
-
-          {#if fallbackDownloadUrl}
-            <a
-              id="btn-direct-download"
-              href={fallbackDownloadUrl}
-              download={fallbackFilename}
-              class="mf-direct-link"
-              title="Click to save directly"
-            >
-              💾 Save {fallbackFilename}
-            </a>
-          {/if}
-        </div>
       </div>
-    </section>
-  </div>
-
-  <!-- ─── Batch Export Progress Modal ─────────────────────────────────────── -->
-  {#if isBatchExporting}
-    <div
-      class="mf-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Batch Export Progress"
-    >
-      <div class="mf-modal-card">
-        <div class="mf-modal-header">
-          <span class="mf-spinner" aria-hidden="true"></span>
-          <h3>Batch Exporting Photos</h3>
-        </div>
-        <p class="mf-modal-status">
-          Processing {batchProgress.current} of {batchProgress.total}…
-        </p>
-        <span class="mf-modal-file">{batchProgress.filename}</span>
-        <div class="mf-progress-track">
-          <div
-            class="mf-progress-fill"
-            style="width: {batchProgress.percent}%;"
-          ></div>
-        </div>
-        <span class="mf-modal-note">{batchProgress.percent}% complete</span>
-      </div>
-    </div>
+    </aside>
   {/if}
 
-  <!-- ─── Save Preset Modal ──────────────────────────────────────────────── -->
-  {#if showSavePresetModal}
-    <div
-      class="mf-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Save Current Preset"
-      tabindex="-1"
-      onclick={(e) => {
-        if (e.target === e.currentTarget) showSavePresetModal = false;
-      }}
-      onkeydown={(e) => {
-        if (e.key === "Escape") showSavePresetModal = false;
-      }}
-    >
-      <div class="mf-modal-card">
-        <div class="mf-modal-header">
-          <svg viewBox="0 0 20 20" fill="currentColor" style="width: 20px; height: 20px; color: var(--accent-light);">
-            <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z"/>
-          </svg>
-          <h3>Save Layout Preset</h3>
+  <!-- ─── Export sheet ──────────────────────────────────────────────────── -->
+  <dialog
+    bind:this={exportDialog}
+    class="sheet glass"
+    aria-labelledby="export-title"
+    onclick={(e) => {
+      if (e.target === exportDialog && !isBatchExporting) exportDialog.close();
+    }}
+    oncancel={(e) => isBatchExporting && e.preventDefault()}
+  >
+    <div class="sheet-in">
+      <div class="sheet-head">
+        <h2 id="export-title">Export</h2>
+        <button class="close" onclick={() => exportDialog.close()} disabled={isBatchExporting} aria-label="Close">×</button>
+      </div>
+
+      {#if isBatchExporting}
+        <div class="progress" role="status">
+          <p>Exporting {batchProgress.current} of {batchProgress.total}</p>
+          <div class="progress-track"><div style:width="{batchProgress.percent}%"></div></div>
+          <p class="hint">{batchProgress.filename}</p>
         </div>
-        <p class="mf-modal-status">
-          Save your current margins, aspect ratio, fonts, colors, analog effects, and logo setup to LocalStorage.
+      {:else}
+        <fieldset>
+          <legend class="label">Size</legend>
+          <div class="sizes">
+            {#each EXPORT_SIZES as s (s.id)}
+              <label class="size" class:on={exportPrefs.size === s.id}>
+                <input type="radio" name="size" value={s.id} bind:group={exportPrefs.size} class="sr-only" />
+                <strong>{s.label}</strong>
+                <span>{sizeLabel(s, "framed")}</span>
+              </label>
+            {/each}
+          </div>
+        </fieldset>
+        <div class="two">
+          <div>
+            <p class="label">Format</p>
+            <div class="seg">
+              <button aria-pressed={exportPrefs.format === "jpeg"} onclick={() => (exportPrefs.format = "jpeg")}>JPEG</button>
+              <button aria-pressed={exportPrefs.format === "png"} onclick={() => (exportPrefs.format = "png")}>PNG</button>
+              <button aria-pressed={exportPrefs.format === "webp"} onclick={() => (exportPrefs.format = "webp")}>WebP</button>
+            </div>
+          </div>
+          <div>
+            <p class="label">Quality</p>
+            <div class="seg">
+              {#each [["good", "Good"], ["high", "High"], ["max", "Max"]] as [q, name] (q)}
+                <button aria-pressed={exportPrefs.quality === q} onclick={() => (exportPrefs.quality = q)} disabled={exportPrefs.format === "png"}>{name}</button>
+              {/each}
+            </div>
+          </div>
+        </div>
+        <p class="hint">
+          {exportPrefs.format === "png"
+            ? "PNG is lossless: the best quality, but large files."
+            : exportPrefs.format === "webp"
+              ? "WebP is about a third smaller than JPEG at the same quality."
+              : "JPEG works everywhere. High is a good balance; Max keeps every detail."}
         </p>
+
+        <div class="actions">
+          <!-- svelte-ignore a11y_autofocus -->
+          <button class="btn accent big" onclick={() => downloadImage("framed")} disabled={!processedImage || isDownloading} autofocus>
+            {isDownloading ? "Exporting…" : "Save framed photo"}
+          </button>
+          <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>Save photo only, without frame</button>
+          {#if filesList.length > 1}
+            <button class="btn ghost" onclick={() => exportBatch("framed")} disabled={selectedCount === 0 || isDownloading}>
+              Save {selectedCount} framed {selectedCount === 1 ? "photo" : "photos"} as ZIP
+            </button>
+          {/if}
+        </div>
+        {#if downloadStatus}<p class="status" role="status">{downloadStatus}</p>{/if}
+        {#if fallbackDownloadUrl}
+          <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>Download didn't start? Save {fallbackFilename}</a>
+        {/if}
+      {/if}
+    </div>
+  </dialog>
+
+  {#if showSavePresetModal}
+    <div class="overlay" role="presentation" onclick={(e) => e.target === e.currentTarget && (showSavePresetModal = false)}>
+      <div class="sheet-in glass card" role="dialog" aria-modal="true" aria-labelledby="save-title">
+        <h2 id="save-title">Save as template</h2>
+        <p class="hint">Keeps your ratio, border, colors, caption style, logo placement and edits for one-tap reuse.</p>
+        <!-- svelte-ignore a11y_autofocus -->
         <input
+          class="text"
           type="text"
-          class="mf-text-input full-width"
-          placeholder="e.g. Minimalist White Gallery"
+          placeholder="e.g. White gallery"
+          aria-label="Template name"
           bind:value={newPresetName}
+          autofocus
           onkeydown={(e) => {
             if (e.key === "Enter") saveCurrentPreset(newPresetName);
             if (e.key === "Escape") showSavePresetModal = false;
           }}
         />
-        <div class="mf-modal-actions">
-          <button
-            class="mf-btn mf-btn-ghost"
-            onclick={() => {
-              showSavePresetModal = false;
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            class="mf-btn mf-btn-primary"
-            onclick={() => saveCurrentPreset(newPresetName)}
-            disabled={!newPresetName.trim()}
-          >
-            Save Preset
-          </button>
+        <div class="actions row">
+          <button class="btn ghost" onclick={() => (showSavePresetModal = false)}>Cancel</button>
+          <button class="btn accent" onclick={() => saveCurrentPreset(newPresetName)} disabled={!newPresetName.trim()}>Save template</button>
         </div>
       </div>
     </div>
   {/if}
 </main>
 
-<!-- ═══════════════════════════════════════════════════════════════════════════
-     STYLES: Minimalist Dark Mode (#121212) & Filmstrip UI
-════════════════════════════════════════════════════════════════════════════ -->
 <style>
-  :global(:root) {
-    --bg: #121212;
-    --surface: #18181c;
-    --surface-2: #1e1e24;
-    --surface-3: #262630;
-    --border: rgba(255, 255, 255, 0.08);
-    --border-hi: rgba(255, 255, 255, 0.15);
-    --text: #e2e2ec;
-    --text-dim: #88889c;
-    --text-dimmer: #525268;
-    --accent: #7c6ff5;
-    --accent-light: #a899ff;
-    --accent-glow: rgba(124, 111, 245, 0.24);
-    --ok: #3ecf8e;
-    --warn: #f6a623;
-    --danger: #f87171;
-    --radius: 10px;
-    --radius-sm: 6px;
-    --radius-xs: 4px;
-    --shadow-md: 0 12px 36px rgba(0, 0, 0, 0.65);
-    --transition: 0.15s ease;
-    --font: "Inter", system-ui, -apple-system, sans-serif;
-    --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
-  }
-
-  :global(*, *::before, *::after) {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-  :global(html) {
-    font-size: 14px;
-    color-scheme: dark;
-    overflow-x: hidden;
-    width: 100%;
-  }
-  :global(body) {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font);
-    line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
-    height: 100vh;
-    overflow-x: hidden;
-    width: 100%;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  #mf-app {
-    height: 100vh;
-    max-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow-x: hidden;
-    width: 100%;
-    max-width: 100vw;
-    box-sizing: border-box;
-    padding: 0 16px;
-    background: var(--bg);
+  /* ── Shell ─────────────────────────────────────────────────────────────── */
+  .app {
+    /* The accent follows the photo's dominant hue (set inline as --hue). */
+    --accent: hsl(var(--hue) 88% 72%);
+    --accent-strong: hsl(var(--hue) 90% 80%);
     position: relative;
+    height: 100dvh;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 384px;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "bar bar"
+      "stage panel"
+      "strip panel";
+    gap: 14px;
+    padding: 14px;
+    padding-top: max(14px, env(safe-area-inset-top));
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+  }
+  .app.empty {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "bar" "stage";
+  }
+  .app > :is(.bar, .stage, .strip, .panel) {
+    position: relative;
+    z-index: 1;
+  }
+  .app.dragging .stage {
+    outline: 2px dashed var(--accent);
+    outline-offset: -6px;
+    border-radius: var(--radius);
   }
 
-  /* ── Header ──────────────────────────────────────────────────────────────── */
-  .mf-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 48px;
-    padding: 0 4px;
-    border-bottom: 1px solid var(--border);
-    gap: 12px;
+  /* ── Ambient backdrop ──────────────────────────────────────────────────── */
+  .ambient {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    background: #0c0c10;
+  }
+  .ambient img {
+    position: absolute;
+    inset: -12%;
+    width: 124%;
+    height: 124%;
+    object-fit: cover;
+    filter: blur(64px) saturate(1.5) brightness(0.62);
+    animation: fade-in 900ms ease-out;
+  }
+  .ambient::after {
+    /* gentle vignette so glass panels keep their contrast at the edges */
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(120% 90% at 50% 40%, transparent 40%, rgb(0 0 0 / 0.45));
+  }
+  .blob {
+    position: absolute;
+    width: 60vmax;
+    height: 60vmax;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.55;
+    animation: drift 28s ease-in-out infinite alternate;
+  }
+  .b1 { background: #ff8a5c; top: -20vmax; left: -15vmax; }
+  .b2 { background: #6a7dff; bottom: -25vmax; right: -15vmax; animation-delay: -9s; }
+  .b3 { background: #2fc6a0; top: 30%; left: 35%; width: 40vmax; height: 40vmax; opacity: 0.35; animation-delay: -17s; }
+  @keyframes drift {
+    to { transform: translate(8vmax, -6vmax) scale(1.15); }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
   }
 
-  .mf-logo {
+  /* ── Glass ─────────────────────────────────────────────────────────────── */
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    backdrop-filter: blur(28px) saturate(1.5);
+    border: 1px solid var(--glass-line);
+    border-radius: var(--radius);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.07),
+      0 18px 50px -20px rgb(0 0 0 / 0.55);
+  }
+
+  /* ── Top bar ───────────────────────────────────────────────────────────── */
+  .bar {
+    grid-area: bar;
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 1rem;
-    font-weight: 700;
+    gap: 16px;
+    padding: 8px 8px 8px 20px;
+    min-height: 56px;
+    border-radius: 999px;
+  }
+  .wordmark {
+    font-stretch: 112%;
+    font-weight: 750;
+    font-size: 1.05rem;
     letter-spacing: -0.02em;
-    color: var(--text);
+    white-space: nowrap;
   }
-  .mf-logo svg {
-    width: 22px;
-    height: 22px;
-    color: var(--accent-light);
-    flex-shrink: 0;
-  }
-
-  .mf-nav-tabs {
+  .meta {
     display: flex;
     align-items: center;
-    gap: 4px;
-    background: var(--surface-2);
-    padding: 3px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-hi);
+    gap: 10px;
+    min-width: 0;
+    margin: 0 auto;
+    font-size: 0.87rem;
+    color: var(--muted);
+  }
+  .meta-name {
+    color: var(--text);
+    font-weight: 550;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 28ch;
+  }
+  .meta-dim {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .pill {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--glass-line);
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+  .bar-export {
+    margin-left: auto;
+  }
+  .meta + .bar-export {
+    margin-left: 0;
   }
 
-  .mf-tab-btn {
+  /* ── Buttons ───────────────────────────────────────────────────────────── */
+  .btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 13px;
-    border-radius: var(--radius-xs);
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--text-dim);
-    cursor: pointer;
-    transition: all var(--transition);
-    border: 1px solid transparent;
-  }
-  .mf-tab-btn svg {
-    width: 13px;
-    height: 13px;
-    opacity: 0.8;
-  }
-  .mf-tab-btn:hover {
-    color: var(--text);
-  }
-  .mf-tab-btn.active {
-    background: var(--surface-3);
-    color: var(--accent-light);
-    border-color: var(--border-hi);
-    font-weight: 600;
-  }
-
-  .mf-header-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .mf-batch-count-pill {
-    font-size: 0.65rem;
-    font-weight: 600;
-    color: var(--accent-light);
-    background: rgba(124, 111, 245, 0.14);
-    border: 1px solid rgba(124, 111, 245, 0.3);
-    padding: 2px 7px;
-    border-radius: var(--radius-xs);
-    font-family: var(--mono);
-  }
-
-  .mf-raw-pill {
-    font-size: 0.65rem;
-    font-weight: 600;
-    color: var(--ok);
-    background: rgba(62, 207, 142, 0.12);
-    border: 1px solid rgba(62, 207, 142, 0.3);
-    padding: 2px 7px;
-    border-radius: var(--radius-xs);
-    font-family: var(--mono);
-  }
-
-  .mf-orient-pill {
-    font-size: 0.65rem;
-    font-weight: 600;
-    color: var(--accent-light);
-    background: rgba(124, 111, 245, 0.12);
-    border: 1px solid rgba(124, 111, 245, 0.3);
-    padding: 2px 7px;
-    border-radius: var(--radius-xs);
-    font-family: var(--mono);
-  }
-
-  /* ── Layout ──────────────────────────────────────────────────────────────── */
-  .mf-layout {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 350px 1fr;
-    gap: 14px;
-    height: calc(100vh - 48px);
-    min-height: 0;
-    overflow: hidden;
-    padding: 8px 0;
-  }
-
-  @media (max-width: 900px) {
-    #mf-app {
-      height: 100vh;
-      overflow-y: auto;
-      overflow-x: hidden;
-      padding: 0 8px;
-    }
-    .mf-layout {
-      grid-template-columns: 100%;
-      height: auto;
-      overflow-x: hidden;
-      gap: 10px;
-    }
-    .mf-sidebar {
-      padding-right: 0;
-      overflow-x: hidden;
-    }
-  }
-
-  /* ── Left Sidebar ───────────────────────────────────────────────────────── */
-  .mf-sidebar {
-    height: 100%;
-    overflow-y: auto;
-    padding-right: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .mf-sidebar::-webkit-scrollbar {
-    width: 5px;
-  }
-  .mf-sidebar::-webkit-scrollbar-thumb {
-    background: var(--surface-3);
-    border-radius: 4px;
-  }
-
-  .mf-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .mf-card-title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-  }
-
-  .mf-card-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    line-height: 1;
-  }
-  .mf-card-title svg {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-    opacity: 0.7;
-  }
-
-  .mf-btn-micro {
-    font-size: 0.66rem;
-    font-weight: 500;
-    color: var(--accent-light);
-    background: transparent;
-    padding: 2px 7px;
-    border-radius: var(--radius-xs);
-    border: 1px solid rgba(124, 111, 245, 0.25);
-    cursor: pointer;
-    transition: all var(--transition);
-  }
-  .mf-btn-micro:hover,
-  .mf-btn-micro.active {
-    background: var(--accent-glow);
-    border-color: var(--accent);
-  }
-
-  /* ── Drop Zone ──────────────────────────────────────────────────────────── */
-  .mf-drop-zone {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
     justify-content: center;
-    gap: 4px;
-    padding: 12px 10px 38px;
-    min-height: 94px;
-    border: 1.5px dashed var(--border-hi);
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-    color: var(--text-dim);
-    text-align: center;
-    font-size: 0.78rem;
-    outline: none;
-    transition:
-      border-color var(--transition),
-      background var(--transition);
+    gap: 8px;
+    padding: 11px 18px;
+    border-radius: 999px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    transition: background 150ms, border-color 150ms, transform 120ms;
   }
-  .mf-drop-zone:hover {
-    border-color: var(--accent);
-    background: rgba(124, 111, 245, 0.06);
-  }
-  .mf-drop-zone.dragging {
-    border-color: var(--accent);
-    background: rgba(124, 111, 245, 0.12);
-    border-style: solid;
-  }
-  .mf-drop-zone.loaded {
-    border-color: var(--ok);
-    border-style: solid;
-  }
-
-  .dz-icon {
-    width: 22px;
-    height: 22px;
-    opacity: 0.35;
-  }
-  .dz-icon.ok {
-    opacity: 1;
-    color: var(--ok);
+  .btn :global(svg) {
     width: 18px;
     height: 18px;
   }
-  .dz-label {
-    font-size: 0.8rem;
-    color: var(--text);
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
   }
-  .dz-filename {
-    font-size: 0.76rem;
-    font-weight: 600;
-    color: var(--ok);
-    max-width: 240px;
-    word-break: break-all;
-  }
-  .dz-hint {
-    font-size: 0.67rem;
-    opacity: 0.55;
-  }
-
-  .mf-browse-label {
-    position: absolute;
-    bottom: 6px;
-    padding: 3px 12px;
-    border-radius: var(--radius-sm);
-    background: var(--surface-3);
-    border: 1px solid var(--border-hi);
-    color: var(--text);
-    font-size: 0.72rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--transition);
-  }
-  .mf-browse-label:hover {
+  .btn.accent {
     background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    color: #111;
   }
-  #mf-file-input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-    width: 0;
-    height: 0;
+  .btn.accent:hover:not(:disabled) {
+    background: var(--accent-strong);
   }
-
-  .mf-spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--border-hi);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: mf-spin 0.65s linear infinite;
-  }
-  @keyframes mf-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .mf-alert-warn {
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    background: rgba(246, 166, 35, 0.1);
-    border: 1px solid rgba(246, 166, 35, 0.3);
-    color: var(--warn);
-    font-size: 0.74rem;
-  }
-
-  /* ── Presets & Pills ────────────────────────────────────────────────────── */
-  .mf-preset-pill-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .mf-pill-btn {
-    padding: 4px 8px;
-    border-radius: var(--radius-xs);
-    background: var(--surface-2);
-    border: 1px solid var(--border-hi);
-    color: var(--text-dim);
-    font-size: 0.7rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--transition);
-  }
-  .mf-pill-btn:hover {
-    background: var(--surface-3);
-    color: var(--accent-light);
-    border-color: var(--accent);
-  }
-
-  /* ── Sliders & Controls ─────────────────────────────────────────────────── */
-  .mf-control-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .mf-group-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .mf-group-label {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .mf-edit-hint {
-    font-size: 0.64rem;
-    font-family: var(--mono);
-    color: var(--ok);
-  }
-
-  .mf-slider-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .mf-slider-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .mf-slider-label {
-    font-size: 0.72rem;
-    color: var(--text);
-    font-weight: 500;
-  }
-  .mf-range-hint {
-    font-size: 0.66rem;
-    color: var(--accent-light);
-    font-family: var(--mono);
-  }
-
-  .mf-num-wrap {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    background: var(--surface-2);
-    border: 1px solid var(--border-hi);
-    border-radius: var(--radius-xs);
-    padding: 1px 5px;
-  }
-  .mf-num-input {
-    width: 36px;
-    background: transparent;
-    border: none;
-    color: var(--accent-light);
-    font-family: var(--mono);
-    font-size: 0.74rem;
-    font-weight: 600;
-    text-align: right;
-    outline: none;
-  }
-  .mf-num-input::-webkit-inner-spin-button {
-    display: none;
-  }
-  .mf-unit {
-    font-size: 0.68rem;
-    font-family: var(--mono);
-    color: var(--text-dimmer);
-  }
-
-  input[type="range"] {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--surface-3);
-    outline: none;
-    cursor: pointer;
-  }
-  input[type="range"]::-webkit-slider-thumb {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    border: 2px solid var(--accent-light);
-    cursor: pointer;
-    transition: transform var(--transition);
-  }
-  input[type="range"]::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-  }
-
-  /* ── Dropdown Select ────────────────────────────────────────────────────── */
-  .mf-select-input {
-    width: 100%;
-    padding: 5px 8px;
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-    border: 1px solid var(--border-hi);
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 0.75rem;
-    outline: none;
-    cursor: pointer;
-  }
-  .mf-select-input option {
-    background: var(--surface-2);
+  .btn.ghost {
+    border: 1px solid var(--glass-line);
+    background: rgb(255 255 255 / 0.06);
     color: var(--text);
   }
-
-  /* ── Presets Grid ───────────────────────────────────────────────────────── */
-  .mf-ratio-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
+  .btn.ghost:hover:not(:disabled) {
+    background: rgb(255 255 255 / 0.12);
   }
-  .mf-ratio-btn {
-    padding: 6px 4px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-hi);
-    background: var(--surface-2);
-    color: var(--text-dim);
-    font-size: 0.72rem;
-    text-align: center;
-    cursor: pointer;
-    transition: all var(--transition);
+  .btn.big {
+    padding: 15px 26px;
+    font-size: 1.05rem;
   }
-  .mf-ratio-btn:hover {
-    background: var(--surface-3);
-    color: var(--text);
+  button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
-  .mf-ratio-btn.active {
-    background: var(--accent-glow);
-    border-color: var(--accent);
-    color: var(--accent-light);
-    font-weight: 600;
+  svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
-  /* ── Editable EXIF Metadata Inputs ──────────────────────────────────────── */
-  .mf-exif-inputs-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    background: var(--surface-2);
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-  }
-
-  .mf-input-row {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .mf-input-grid-2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-
-  .mf-input-lbl {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.69rem;
-    color: var(--text-dim);
-    font-weight: 500;
-    user-select: none;
-    cursor: pointer;
-  }
-
-  .mf-checkbox-mini {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 13px;
-    height: 13px;
-    border: 1.5px solid var(--border-hi);
-    border-radius: 3px;
-    background: var(--surface-3);
-    cursor: pointer;
-    position: relative;
-    flex-shrink: 0;
-  }
-  .mf-checkbox-mini:checked {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .mf-checkbox-mini:checked::after {
-    content: "";
-    position: absolute;
-    top: 1px;
-    left: 3px;
-    width: 3px;
-    height: 6px;
-    border: solid #fff;
-    border-width: 0 1.5px 1.5px 0;
-    transform: rotate(45deg);
-  }
-
-  .mf-text-input {
-    width: 100%;
-    padding: 4px 7px;
-    border-radius: var(--radius-xs);
-    background: var(--surface-3);
-    border: 1px solid var(--border-hi);
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 0.74rem;
-    outline: none;
-    transition: border-color var(--transition);
-  }
-  .mf-text-input:focus {
-    border-color: var(--accent);
-  }
-  .mf-text-input::placeholder {
-    color: var(--text-dimmer);
-  }
-
-  .mf-auto-font-badge {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 4px 7px;
-    background: rgba(124, 111, 245, 0.08);
-    border: 1px solid rgba(124, 111, 245, 0.22);
-    border-radius: var(--radius-xs);
-    font-size: 0.69rem;
-    font-family: var(--mono);
-    color: var(--accent-light);
-  }
-  .mf-badge-detail {
-    color: var(--text-dim);
-    font-size: 0.64rem;
-  }
-
-  /* ── Alignment & Zone Buttons ───────────────────────────────────────────── */
-  .mf-align-group,
-  .mf-zone-group {
-    display: grid;
-    gap: 3px;
-    background: var(--surface-2);
-    padding: 3px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-  }
-  .mf-align-group {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-  .mf-zone-group {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .mf-align-btn,
-  .mf-zone-btn {
-    padding: 5px 6px;
-    border-radius: var(--radius-xs);
-    font-size: 0.71rem;
-    font-weight: 500;
-    color: var(--text-dim);
-    background: transparent;
-    border: 1px solid transparent;
-    cursor: pointer;
-    transition: all var(--transition);
-    text-align: center;
-  }
-  .mf-align-btn.active,
-  .mf-zone-btn.active {
-    background: var(--surface-3);
-    color: var(--accent-light);
-    border-color: var(--border-hi);
-    font-weight: 600;
-  }
-
-  /* ── Colors & Auto Contrast ─────────────────────────────────────────────── */
-  .mf-auto-contrast-row {
-    background: rgba(124, 111, 245, 0.08);
-    padding: 5px 7px;
-    border-radius: var(--radius-xs);
-    border: 1px solid rgba(124, 111, 245, 0.2);
-  }
-  .mf-auto-contrast-text {
-    font-size: 0.71rem;
-    font-weight: 600;
-    color: var(--accent-light);
-  }
-  .mf-lum-indicator {
-    font-size: 0.64rem;
-    font-family: var(--mono);
-    color: var(--text-dim);
-    font-weight: 400;
-  }
-
-  .mf-color-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-  .mf-color-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .mf-color-field.disabled {
-    opacity: 0.6;
-    pointer-events: none;
-  }
-  .mf-color-field-label {
-    font-size: 0.71rem;
-    color: var(--text-dim);
-    font-weight: 500;
-  }
-
-  .mf-color-picker-wrap {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .mf-color-swatch {
-    width: 22px;
-    height: 22px;
-    border-radius: var(--radius-xs);
-    border: 1px solid var(--border-hi);
-    flex-shrink: 0;
-  }
-  input[type="color"] {
-    appearance: none;
-    -webkit-appearance: none;
-    flex: 1;
-    height: 26px;
-    border: 1px solid var(--border-hi);
-    border-radius: var(--radius-xs);
-    background: var(--surface-2);
-    padding: 1px 2px;
-    cursor: pointer;
-  }
-  input[type="color"]::-webkit-color-swatch-wrapper {
-    padding: 0;
-  }
-  input[type="color"]::-webkit-color-swatch {
-    border: none;
-    border-radius: 3px;
-  }
-  .mf-color-hex {
-    font-size: 0.66rem;
-    font-family: var(--mono);
-    color: var(--text-dimmer);
-  }
-
-  .mf-palette-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-  }
-  .mf-pal-item {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-  .mf-pal-swatch {
-    width: 26px;
-    height: 26px;
-    border-radius: var(--radius-sm);
-    border: 2px solid rgba(255, 255, 255, 0.15);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .pal-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-  }
-  .mf-pal-del {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--surface-3);
-    color: var(--text-dim);
-    font-size: 0.72rem;
-    cursor: pointer;
-    border: 1px solid var(--border-hi);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .mf-toggle-compact {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-  }
-  .mf-switch {
-    width: 32px;
-    height: 18px;
-    border-radius: 9px;
-    background: var(--surface-3);
-    border: 1px solid var(--border-hi);
-    display: flex;
-    align-items: center;
-    padding: 1px;
-    cursor: pointer;
-    transition: background var(--transition);
-  }
-  .mf-switch.on {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .mf-switch-thumb {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--text-dim);
-    transition: transform var(--transition);
-  }
-  .mf-switch.on .mf-switch-thumb {
-    transform: translateX(14px);
-    background: #fff;
-  }
-
-  /* ── Right Main Section ─────────────────────────────────────────────────── */
-  .mf-main {
-    height: 100%;
+  /* ── Stage ─────────────────────────────────────────────────────────────── */
+  .stage {
+    grid-area: stage;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
   }
-
-  .mf-preview-card {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-
-  .mf-card-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .mf-header-title-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .mf-mode-tag {
-    font-size: 0.64rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    background: rgba(124, 111, 245, 0.18);
-    color: var(--accent-light);
-    border: 1px solid rgba(124, 111, 245, 0.35);
-    padding: 1px 6px;
-    border-radius: var(--radius-xs);
-  }
-  .mf-card-header-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .mf-canvas-dims {
-    font-size: 0.71rem;
-    font-family: var(--mono);
-    color: var(--text-dimmer);
-  }
-
-  /* ── Viewport ───────────────────────────────────────────────────────────── */
-  .mf-preview-viewport {
-    flex: 1;
-    min-height: 0;
-    display: flex;
+  .fit {
+    position: absolute;
+    inset: 8px;
     align-items: center;
     justify-content: center;
-    padding: 14px;
+    container-type: size;
+  }
+  .print {
+    position: relative;
+    width: min(100cqw, 100cqh * var(--ar));
+    aspect-ratio: var(--ar);
+    border-radius: 3px;
     overflow: hidden;
-    position: relative;
-    background:
-      radial-gradient(
-        ellipse 60% 50% at 50% 50%,
-        rgba(124, 111, 245, 0.03) 0%,
-        transparent 70%
-      ),
-      repeating-conic-gradient(var(--surface-2) 0% 25%, var(--surface) 0% 50%) 0
-        0 / 16px 16px;
+    box-shadow:
+      0 2px 4px rgb(0 0 0 / 0.25),
+      0 40px 80px -30px rgb(0 0 0 / 0.75);
   }
-
-  .mf-canvas-container {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    line-height: 0;
-    will-change: transform;
-    transform: translateZ(0);
-    backface-visibility: hidden;
-  }
-
-  .mf-preview-canvas {
-    width: 100%;
-    height: 100%;
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    box-shadow: var(--shadow-md);
-    border-radius: 4px;
+  canvas {
     display: block;
-    will-change: transform;
-    transform: translateZ(0);
-    backface-visibility: hidden;
-    animation: mf-fade-in 0.2s ease;
+    width: 100%;
+    height: 100%;
   }
-
-  .mf-live-bloom-overlay {
+  .fx-bloom,
+  .fx-grain,
+  .develop {
     position: absolute;
     inset: 0;
     pointer-events: none;
+  }
+  .fx-bloom {
     mix-blend-mode: screen;
-    backdrop-filter: blur(10px) brightness(1.2);
-    -webkit-backdrop-filter: blur(10px) brightness(1.2);
-    border-radius: 4px;
-    will-change: opacity, transform;
-    transform: translateZ(0);
-    transition: opacity 0.05s linear;
+  }
+  .fx-grain {
+    mix-blend-mode: overlay;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E") 0 0 / 160px 160px;
+  }
+  .develop {
+    background: #fff;
+    animation: develop 650ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  }
+  @keyframes develop {
+    from { opacity: 0.85; }
+    to { opacity: 0; }
   }
 
-  .mf-live-grain-overlay {
+  /* ── Empty state ───────────────────────────────────────────────────────── */
+  .hero {
     position: absolute;
     inset: 0;
-    pointer-events: none;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-    background-repeat: repeat;
-    background-size: 160px 160px;
-    border-radius: 4px;
-    will-change: opacity, transform;
-    transform: translateZ(0);
-    transition: opacity 0.05s linear;
-  }
-
-  @keyframes mf-fade-in {
-    from {
-      opacity: 0;
-      transform: scale(0.99);
-    }
-  }
-
-  .mf-preview-empty {
     display: flex;
     flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px;
+    text-align: center;
+    overflow: auto;
+  }
+  .fan {
+    position: relative;
+    width: 420px;
+    max-width: 90vw;
+    height: 230px;
+    margin-bottom: 18px;
+  }
+  .sample {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 150px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 50px -18px rgb(0 0 0 / 0.7);
+    transition: transform 300ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .sample-photo {
+    display: block;
+    aspect-ratio: 1;
+  }
+  .sample-cap {
+    font-size: 0.8rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .s-instant {
+    background: #fbfaf6;
+    color: #222;
+    padding: 9px 9px 0;
+    transform: translateX(-140%) rotate(-9deg) translateY(16px);
+  }
+  .s-instant .sample-cap {
+    font-size: 1.05rem;
+    padding: 9px 0 12px;
+    text-align: center;
+  }
+  .s-film {
+    background: #000;
+    color: #ddd;
+    padding: 6px;
+    z-index: 1;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  .s-film .sample-cap {
+    font-size: 0.62rem;
+    padding: 6px 0 2px;
+  }
+  .s-mat {
+    background: #f2efe8;
+    color: #333;
+    padding: 18px 18px 0;
+    transform: translateX(40%) rotate(8deg) translateY(20px);
+  }
+  .s-mat .sample-cap {
+    font-size: 0.85rem;
+    padding: 10px 0 14px;
+    text-align: center;
+  }
+  .fan:hover .s-instant { transform: translateX(-155%) rotate(-12deg) translateY(10px); }
+  .fan:hover .s-mat { transform: translateX(55%) rotate(11deg) translateY(14px); }
+  .p-sunset { background: linear-gradient(170deg, #ffb26b 0%, #ff7a7a 45%, #4a3a6b 100%); }
+  .p-sea { background: linear-gradient(180deg, #9fd3ff 0%, #4f8fc0 50%, #1d3d5c 100%); }
+  .p-forest { background: linear-gradient(160deg, #cfe8a0 0%, #5f9a5a 50%, #23402c 100%); }
+  .hero h1 {
+    font-stretch: 112%;
+    font-weight: 750;
+    font-size: clamp(2rem, 4.6vw, 3.4rem);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    max-width: 16ch;
+    text-wrap: balance;
+  }
+  .lead {
+    max-width: 44ch;
+    font-size: 1.08rem;
+    line-height: 1.5;
+    color: var(--muted);
+    text-wrap: pretty;
+  }
+  .fine {
+    max-width: 52ch;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .toast,
+  .alert {
+    position: absolute;
+    left: 50%;
+    translate: -50% 0;
+    display: flex;
     align-items: center;
     gap: 10px;
-    color: var(--text-dimmer);
-    opacity: 0.5;
+    max-width: calc(100% - 32px);
+    padding: 10px 16px;
+    border-radius: 999px;
+    font-size: 0.9rem;
   }
-  .mf-preview-empty svg {
-    width: 52px;
-    height: 52px;
+  .toast {
+    bottom: 12px;
   }
-  .mf-preview-empty p {
-    font-size: 0.82rem;
-  }
-
-  /* ── Filmstrip Bar ──────────────────────────────────────────────────────── */
-  .mf-filmstrip-bar {
-    flex-shrink: 0;
-    height: 72px;
-    background: var(--surface-2);
-    border-top: 1px solid var(--border);
-    padding: 7px 12px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    display: flex;
-    align-items: center;
-  }
-
-  .mf-filmstrip-bar::-webkit-scrollbar {
-    height: 4px;
-  }
-  .mf-filmstrip-bar::-webkit-scrollbar-thumb {
-    background: var(--surface-3);
-    border-radius: 2px;
-  }
-
-  .mf-filmstrip-track {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .mf-filmstrip-item {
-    position: relative;
-    width: 68px;
-    height: 52px;
-    border-radius: var(--radius-xs);
-    overflow: hidden;
-    background: var(--surface-3);
-    border: 2px solid rgba(255, 255, 255, 0.1);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: all var(--transition);
-  }
-  .mf-filmstrip-item:hover {
-    border-color: var(--accent-light);
-    transform: translateY(-1px);
-  }
-  .mf-filmstrip-item.active {
+  .alert {
+    top: 12px;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-glow);
+  }
+  .alert button {
+    font-size: 1.2rem;
+    line-height: 1;
+    padding: 0 4px;
+  }
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgb(255 255 255 / 0.25);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex: none;
+  }
+  @keyframes spin {
+    to { rotate: 360deg; }
   }
 
-  .mf-filmstrip-thumb {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+  /* ── Strip ─────────────────────────────────────────────────────────────── */
+  .strip {
+    grid-area: strip;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    min-width: 0;
+    justify-self: start;
+    max-width: 100%;
+  }
+  .strip ol {
+    display: flex;
+    gap: 10px;
+    list-style: none;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 6px 4px 4px;
+    min-width: 0;
+  }
+  .strip-note {
+    flex: none;
+    font-size: 0.82rem;
+    color: var(--muted);
+    padding-right: 6px;
+  }
+  .frame {
+    position: relative;
+    flex: none;
+  }
+  .frame-pick {
+    position: relative;
     display: block;
+    height: 56px;
+    border-radius: 10px;
+    overflow: hidden;
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    transition: outline-color 150ms;
   }
-
-  .mf-filmstrip-num {
-    position: absolute;
-    bottom: 2px;
-    left: 3px;
-    font-size: 0.58rem;
-    font-family: var(--mono);
-    color: #fff;
-    background: rgba(0, 0, 0, 0.65);
-    padding: 0 3px;
-    border-radius: 2px;
-    line-height: 1.2;
+  .frame.active .frame-pick {
+    outline-color: var(--accent);
   }
-
-  .mf-filmstrip-raw-tag {
+  .frame-pick img {
+    display: block;
+    height: 100%;
+    width: auto;
+  }
+  .frame-raw {
     position: absolute;
-    top: 2px;
-    left: 2px;
-    font-size: 0.54rem;
-    font-family: var(--mono);
+    bottom: 3px;
+    right: 3px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: rgb(0 0 0 / 0.6);
+    font-size: 0.6rem;
     font-weight: 700;
-    color: var(--ok);
-    background: rgba(0, 0, 0, 0.7);
-    padding: 0 3px;
-    border-radius: 2px;
-    line-height: 1.2;
   }
-
-  .mf-filmstrip-del {
+  .frame-sel {
     position: absolute;
-    top: 2px;
-    right: 2px;
+    top: 4px;
+    left: 4px;
+    display: grid;
+  }
+  .frame-sel input {
     width: 15px;
     height: 15px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.75);
-    color: var(--text-dim);
-    font-size: 0.72rem;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    border: none;
-    transition: all var(--transition);
+    accent-color: var(--accent);
   }
-  .mf-filmstrip-item:hover .mf-filmstrip-del {
+  .frame-del,
+  .mini-del {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    color: #111;
+    font-size: 0.9rem;
+    line-height: 1;
+    box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+  }
+  .frame-del {
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .frame:hover .frame-del,
+  .frame.active .frame-del,
+  .frame-del:focus-visible {
     opacity: 1;
   }
-  .mf-filmstrip-del:hover {
-    background: var(--danger);
-    color: #fff;
+  .frame-add {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    border: 1px dashed rgb(255 255 255 / 0.35);
+    font-size: 1.5rem;
+    color: var(--muted);
+  }
+  .frame-add:hover {
+    color: var(--text);
+    border-color: var(--text);
   }
 
-  .mf-filmstrip-add {
-    width: 52px;
-    height: 52px;
-    border-radius: var(--radius-xs);
-    border: 1.5px dashed var(--border-hi);
-    background: rgba(255, 255, 255, 0.02);
-    color: var(--text-dim);
+  /* ── Control panel ─────────────────────────────────────────────────────── */
+  .panel {
+    grid-area: panel;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .seg {
+    display: inline-flex;
+    padding: 3px;
     gap: 2px;
-    font-size: 0.65rem;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: all var(--transition);
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.25);
+    border: 1px solid var(--glass-line);
   }
-  .mf-filmstrip-add svg {
-    width: 14px;
-    height: 14px;
+  .seg button {
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 0.88rem;
+    font-weight: 550;
+    color: var(--muted);
+    transition: background 150ms, color 150ms;
   }
-  .mf-filmstrip-add:hover {
-    border-color: var(--accent);
-    color: var(--accent-light);
-    background: rgba(124, 111, 245, 0.06);
+  .seg button:hover:not(:disabled) {
+    color: var(--text);
   }
-
-  /* ── Download Bar ───────────────────────────────────────────────────────── */
-  .mf-download-bar {
-    flex-shrink: 0;
+  .seg button[aria-pressed="true"] {
+    background: rgb(255 255 255 / 0.92);
+    color: #111;
+  }
+  .seg.wrap {
     display: flex;
-    align-items: center;
-    gap: 10px;
     flex-wrap: wrap;
-    padding: 9px 14px;
-    border-top: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .mf-quality-wrap {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    max-width: 150px;
-    flex: 1;
-  }
-
-  .mf-quality-label {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 0.7rem;
-    color: var(--text-dim);
-    font-weight: 500;
-  }
-  .mf-quality-label strong {
-    font-family: var(--mono);
-    color: var(--accent-light);
-    font-size: 0.73rem;
-  }
-
-  .mf-btn {
-    display: inline-flex;
-    align-items: center;
+    background: none;
+    border: 0;
+    padding: 0;
     gap: 6px;
-    padding: 6px 14px;
-    border-radius: var(--radius-sm);
-    font-size: 0.78rem;
-    font-weight: 600;
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: all var(--transition);
-    white-space: nowrap;
   }
-  .mf-btn svg {
-    width: 13px;
-    height: 13px;
+  .seg.wrap button {
+    border: 1px solid var(--glass-line);
+    background: rgb(255 255 255 / 0.05);
   }
-
-  .mf-btn-primary {
-    background: var(--accent);
-    color: #fff;
-    border-color: var(--accent);
-    box-shadow: 0 2px 10px var(--accent-glow);
+  .modes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    margin: 14px 14px 4px;
   }
-  .mf-btn-primary:hover:not(:disabled) {
-    background: var(--accent-light);
-    border-color: var(--accent-light);
-    transform: translateY(-1px);
-  }
-  .mf-btn-primary:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
+  .modes button {
+    padding: 10px;
+    font-size: 0.98rem;
+    font-weight: 650;
   }
 
-  .mf-btn-accent {
-    background: rgba(62, 207, 142, 0.15);
-    color: var(--ok);
-    border-color: rgba(62, 207, 142, 0.35);
-  }
-  .mf-btn-accent:hover:not(:disabled) {
-    background: var(--ok);
-    color: #0c1a13;
-    border-color: var(--ok);
-    transform: translateY(-1px);
-  }
-  .mf-btn-accent:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-
-  .mf-btn-ghost {
-    background: var(--surface-2);
-    color: var(--text-dim);
-    border-color: var(--border-hi);
-  }
-  .mf-btn-ghost:hover {
-    background: var(--surface-3);
-    border-color: var(--accent);
-    color: var(--accent-light);
-  }
-  .mf-btn-ghost.full-width {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .mf-spinner-sm {
-    width: 13px;
-    height: 13px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: mf-spin 0.65s linear infinite;
-  }
-
-  .mf-dl-status {
-    font-size: 0.71rem;
-    font-family: var(--mono);
-    color: var(--ok);
-    animation: mf-fade-in 0.2s ease;
-  }
-
-  .mf-direct-link {
-    font-size: 0.71rem;
-    font-family: var(--mono);
-    color: var(--ok);
-    text-decoration: none;
-    cursor: pointer;
-    padding: 3px 8px;
-    background: rgba(62, 207, 142, 0.12);
-    border: 1px solid rgba(62, 207, 142, 0.35);
-    border-radius: var(--radius-xs);
-    transition: all var(--transition);
-    display: inline-flex;
-    align-items: center;
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     gap: 4px;
-    animation: mf-fade-in 0.25s ease;
+    padding: 10px 10px 6px;
+    border-bottom: 1px solid var(--glass-line);
+    flex: none;
   }
-  .mf-direct-link:hover {
-    background: rgba(62, 207, 142, 0.25);
-    color: #fff;
-    border-color: var(--ok);
+  .tab {
+    display: grid;
+    justify-items: center;
+    gap: 5px;
+    padding: 9px 4px 8px;
+    border-radius: 14px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    transition: background 150ms, color 150ms;
   }
-
-  /* ── Modal Backdrop & Card ──────────────────────────────────────────────── */
-  .mf-modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.72);
-    backdrop-filter: blur(6px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 20px;
-    animation: mf-fade-in 0.2s ease;
+  .tab svg {
+    width: 22px;
+    height: 22px;
   }
-
-  .mf-modal-card {
-    background: var(--surface);
-    border: 1px solid var(--border-hi);
-    border-radius: var(--radius);
-    padding: 24px;
-    width: 100%;
-    max-width: 420px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: 12px;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8);
-  }
-
-  .mf-modal-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .mf-modal-header h3 {
-    font-size: 0.95rem;
-    font-weight: 700;
+  .tab:hover {
     color: var(--text);
+    background: rgb(255 255 255 / 0.06);
+  }
+  .tab[aria-pressed="true"] {
+    color: var(--accent);
+    background: rgb(255 255 255 / 0.1);
   }
 
-  .mf-modal-status {
-    font-size: 0.8rem;
-    color: var(--text-dim);
-  }
-
-  .mf-modal-file {
-    font-size: 0.73rem;
-    font-family: var(--mono);
-    color: var(--accent-light);
-    max-width: 360px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mf-progress-track {
-    width: 100%;
-    height: 8px;
-    border-radius: 4px;
-    background: var(--surface-3);
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-
-  .mf-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent) 0%, var(--ok) 100%);
-    border-radius: 4px;
-    transition: width 0.2s ease;
-  }
-
-  .mf-modal-note {
-    font-size: 0.72rem;
-    font-family: var(--mono);
-    color: var(--text-dimmer);
-  }
-
-  /* ── Presets & Templates ─────────────────────────────────────────────────── */
-  .mf-presets-container {
+  .body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 18px 20px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 18px;
+    scrollbar-width: thin;
   }
-  .mf-preset-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+  .stack {
+    display: grid;
+    gap: 20px;
   }
-  .mf-preset-chip {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 0.72rem;
-    font-weight: 500;
-    padding: 4px 10px;
-    border-radius: var(--radius-xs);
-    cursor: pointer;
-    transition: all var(--transition);
-    display: inline-flex;
-    align-items: center;
-  }
-  .mf-preset-chip:hover {
-    background: var(--surface-3);
-    color: var(--text);
-    border-color: var(--accent);
-  }
-  .mf-preset-chip.custom {
-    background: rgba(124, 111, 245, 0.12);
-    border-color: rgba(124, 111, 245, 0.35);
-    color: var(--accent-light);
-  }
-  .mf-preset-chip-user {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    position: relative;
-  }
-  .mf-preset-del {
-    background: transparent;
-    border: none;
-    color: var(--text-dimmer);
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0 4px;
-    line-height: 1;
-    transition: color var(--transition);
-  }
-  .mf-preset-del:hover {
-    color: var(--danger);
-  }
-  .mf-btn-micro.highlight {
-    color: var(--accent-light);
-    border-color: rgba(124, 111, 245, 0.4);
-    background: rgba(124, 111, 245, 0.12);
-  }
-  .mf-btn-micro.highlight:hover {
-    background: var(--accent);
-    color: #fff;
-  }
-  .mf-btn-micro.danger {
-    color: var(--danger);
-    border-color: rgba(248, 113, 113, 0.3);
-  }
-  .mf-btn-micro.danger:hover {
-    background: var(--danger);
-    color: #fff;
-  }
-
-  /* ── Logo & Watermark ────────────────────────────────────────────────────── */
-  .mf-logo-drop {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    border: 1px dashed var(--border-hi);
-    border-radius: var(--radius-sm);
-    padding: 16px 12px;
-    text-align: center;
-    background: var(--surface-2);
-    transition: border-color var(--transition);
-  }
-  .mf-logo-drop:hover {
-    border-color: var(--accent);
-  }
-  .mf-logo-upload-btn {
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .mf-logo-subtext {
-    font-size: 0.68rem;
-    color: var(--text-dim);
-    font-weight: 400;
-  }
-  .mf-logo-active-box {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+  .label {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--muted);
     margin-bottom: 8px;
   }
-  .mf-logo-preview-thumb {
-    width: 38px;
-    height: 38px;
-    border-radius: var(--radius-xs);
-    background: #202028;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    flex-shrink: 0;
-    border: 1px solid var(--border);
+  .hint {
+    font-size: 0.83rem;
+    line-height: 1.45;
+    color: var(--muted);
   }
-  .mf-logo-preview-thumb img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
+  .hint.warn {
+    color: var(--accent);
   }
-  .mf-logo-meta {
+
+  /* Looks */
+  .looks {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px 10px;
+  }
+  .look {
+    display: grid;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .look img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 12px;
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    transition: outline-color 150ms;
+  }
+  .look[aria-pressed="true"] {
+    color: var(--text);
+  }
+  .look[aria-pressed="true"] img {
+    outline-color: var(--accent);
+  }
+
+  /* Templates */
+  .templates {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px 10px;
+    align-items: end;
+  }
+  .template {
+    position: relative;
+  }
+  .template > button:first-child {
+    width: 100%;
+    display: grid;
+    gap: 6px;
+    justify-items: center;
+  }
+  .template-mini {
+    width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 1;
+    justify-content: center;
+    gap: 7%;
+    border-radius: 4px;
+    box-shadow: 0 8px 18px -8px rgb(0 0 0 / 0.6);
+    transition: transform 150ms;
   }
-  .mf-logo-name {
-    font-size: 0.74rem;
-    font-weight: 600;
+  .template > button:hover .template-mini {
+    transform: translateY(-2px);
+  }
+  .template-photo {
+    flex: 1;
+    min-height: 30%;
+    background: linear-gradient(160deg, hsl(var(--hue) 60% 70%), hsl(calc(var(--hue) + 40) 40% 30%));
+  }
+  .template-cap {
+    font-size: 0.6rem;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .template-name {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  /* Ratios */
+  .ratios {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .ratio {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    background: rgb(255 255 255 / 0.05);
+    border: 1px solid transparent;
+    font-size: 0.88rem;
+    text-align: left;
+    color: var(--muted);
+  }
+  .ratio-glyph {
+    flex: none;
+    height: 24px;
+    border: 2px solid currentColor;
+    border-radius: 3px;
+  }
+  .ratio-glyph.loose {
+    border-style: dashed;
+  }
+  .ratio[aria-pressed="true"] {
+    border-color: var(--accent);
     color: var(--text);
+  }
+  .ratio[aria-pressed="true"] .ratio-glyph {
+    color: var(--accent);
+  }
+
+  /* Colors */
+  .swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .swatch {
+    position: relative;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+    display: grid;
+    place-items: center;
+  }
+  .swatch[aria-pressed="true"] {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .swatch-custom {
+    cursor: pointer;
+    background: conic-gradient(#ff5c8a, #ffb13e, #e6ff3e, #3effa8, #3eb8ff, #8a3eff, #ff5c8a);
+    overflow: hidden;
+  }
+  .swatch-custom input {
+    opacity: 0;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+  }
+  .pair {
+    position: relative;
+  }
+  .pair-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .color-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .color-row input {
+    width: 40px;
+    height: 32px;
+    border: 1px solid var(--glass-line);
+    border-radius: 8px;
+    background: none;
+  }
+
+  /* Switch */
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    font-size: 0.93rem;
+  }
+  .switch input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+  }
+  .switch-track {
+    flex: none;
+    width: 44px;
+    height: 26px;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.18);
+    position: relative;
+    transition: background 150ms;
+  }
+  .switch-track::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 4px rgb(0 0 0 / 0.3);
+    transition: translate 150ms;
+  }
+  .switch input:checked + .switch-track {
+    background: var(--accent);
+  }
+  .switch input:checked + .switch-track::after {
+    translate: 18px 0;
+  }
+  .switch input:focus-visible + .switch-track {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Caption fields & fonts */
+  .fields {
+    display: grid;
+    gap: 8px;
+  }
+  .field {
+    display: grid;
+    grid-template-columns: 8rem 1fr;
+    align-items: center;
+    gap: 10px;
+  }
+  .field-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.86rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .field-check input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+  }
+  .text {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    background: rgb(0 0 0 / 0.25);
+    border: 1px solid var(--glass-line);
+    border-radius: 12px;
+    font-size: 0.92rem;
+  }
+  .text:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .text:disabled {
+    opacity: 0.4;
+  }
+  .fonts {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .font {
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    padding: 10px 4px 8px;
+    border-radius: 14px;
+    background: rgb(255 255 255 / 0.05);
+    border: 1px solid transparent;
+    min-width: 0;
+  }
+  .font-aa {
+    font-size: 1.5rem;
+    line-height: 1.1;
+  }
+  .font-name {
+    font-size: 0.72rem;
+    color: var(--muted);
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .mf-logo-dims {
-    font-size: 0.66rem;
-    font-family: var(--mono);
-    color: var(--text-dim);
+  .font[aria-pressed="true"] {
+    border-color: var(--accent);
+  }
+  .font-more {
+    display: grid;
+    gap: 8px;
+  }
+  .upload-font {
+    cursor: pointer;
   }
 
-  /* ── Subtitles & Dividers ────────────────────────────────────────────────── */
-  .mf-divider {
-    height: 1px;
-    background: var(--border);
-    margin: 12px 0 8px;
-  }
-  .mf-section-subtitle {
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--accent-light);
-    margin-bottom: 6px;
-  }
-  .mf-modal-actions {
+  /* Logo */
+  .logo-row {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    gap: 12px;
+  }
+  .logo-row img {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    padding: 6px;
+    border-radius: 12px;
+    background: rgb(255 255 255 / 0.12);
+  }
+  .logo-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.92rem;
+  }
+  .upload {
+    display: grid;
+    gap: 6px;
+    padding: 22px 18px;
+    border: 1px dashed rgb(255 255 255 / 0.35);
+    border-radius: 16px;
+    cursor: pointer;
+  }
+  .upload:hover,
+  .upload:focus-within {
+    border-color: var(--accent);
+  }
+  .upload-title {
+    font-weight: 650;
+  }
+
+  /* ── Export sheet & dialogs ────────────────────────────────────────────── */
+  .sheet {
+    margin: auto;
+    width: min(500px, calc(100% - 32px));
+    max-height: calc(100dvh - 32px);
+    padding: 0;
+    color: var(--text);
+    background: var(--glass-strong);
+  }
+  .sheet[open] {
+    animation: rise 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .sheet::backdrop {
+    background: rgb(0 0 0 / 0.45);
+    backdrop-filter: blur(4px);
+  }
+  @keyframes rise {
+    from { translate: 0 24px; opacity: 0; }
+  }
+  .sheet-in {
+    display: grid;
+    gap: 18px;
+    padding: 22px;
+    padding-bottom: max(22px, env(safe-area-inset-bottom));
+  }
+  .sheet-head {
+    display: flex;
+    align-items: center;
+  }
+  .sheet-in h2 {
+    font-stretch: 112%;
+    font-weight: 750;
+    font-size: 1.5rem;
+    letter-spacing: -0.02em;
+  }
+  .close {
+    margin-left: auto;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    font-size: 1.3rem;
+    background: rgb(255 255 255 / 0.08);
+  }
+  fieldset {
+    border: 0;
+  }
+  .sizes {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     gap: 8px;
-    width: 100%;
-    margin-top: 8px;
+  }
+  .size {
+    display: grid;
+    gap: 2px;
+    padding: 12px 8px;
+    border-radius: 14px;
+    background: rgb(255 255 255 / 0.05);
+    border: 1px solid transparent;
+    text-align: center;
+    cursor: pointer;
+  }
+  .size strong {
+    font-size: 0.92rem;
+    font-weight: 650;
+  }
+  .size span {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .size.on {
+    border-color: var(--accent);
+  }
+  .size:focus-within {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .two {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 22px;
+  }
+  .actions {
+    display: grid;
+    gap: 8px;
+  }
+  .actions.row {
+    grid-template-columns: 1fr 1.4fr;
+  }
+  .status {
+    font-size: 0.92rem;
+  }
+  .fallback {
+    color: var(--accent);
+    font-size: 0.92rem;
+    text-underline-offset: 3px;
+  }
+  .progress {
+    display: grid;
+    gap: 10px;
+  }
+  .progress-track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgb(255 255 255 / 0.15);
+    overflow: hidden;
+  }
+  .progress-track div {
+    height: 100%;
+    background: var(--accent);
+    transition: width 200ms;
+  }
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgb(0 0 0 / 0.45);
+  }
+  .card {
+    width: min(420px, 100%);
+    background: var(--glass-strong);
+  }
+
+  /* ── Phone ─────────────────────────────────────────────────────────────── */
+  @media (max-width: 899px) {
+    .app {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      grid-template-areas: "bar" "stage" "strip" "panel";
+      gap: 10px;
+      padding: 10px;
+      padding-top: max(10px, env(safe-area-inset-top));
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+    }
+    .bar {
+      min-height: 48px;
+      padding: 6px 6px 6px 16px;
+    }
+    .meta-dim {
+      display: none;
+    }
+    .strip {
+      padding: 6px 10px;
+      justify-self: stretch;
+    }
+    .strip-note {
+      display: none;
+    }
+    .frame-pick,
+    .frame-add {
+      height: 44px;
+    }
+    .frame-add {
+      width: 44px;
+    }
+    .panel {
+      max-height: 46dvh;
+    }
+    .modes {
+      margin: 10px 10px 2px;
+    }
+    .tabs.many {
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tabs.many .tab {
+      flex: none;
+      min-width: 68px;
+    }
+    .body {
+      padding: 14px 14px 16px;
+    }
+    .field {
+      grid-template-columns: 7rem 1fr;
+    }
+    .sizes {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .sheet {
+      margin: auto 0 0;
+      width: 100%;
+      max-width: none;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .fan {
+      height: 190px;
+      transform: scale(0.85);
+    }
   }
 </style>
