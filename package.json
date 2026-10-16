@@ -7,12 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/frameLayout.test.js"
+    "test": "node src/lib/frameLayout.test.js && node src/lib/geometry.test.js && node src/lib/color.test.js && node src/lib/palette.test.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "svelte": "^5.57.0",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "vite-plugin-pwa": "^2.0.0"
   },
   "dependencies": {
     "@capacitor/cli": "^8.5.3",

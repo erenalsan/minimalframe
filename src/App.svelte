@@ -17,9 +17,25 @@
   import { applyAnalogEffects } from "./lib/effectsEngine.js";
   import Dial from "./lib/Dial.svelte";
   import { computeFrameLayout } from "./lib/frameLayout.js";
+  import { extractPalette, tint } from "./lib/palette.js";
+  import { idbGet, idbSet } from "./lib/store.js";
+  import {
+    CROP_DEFAULT,
+    CROP_RATIOS,
+    applyGeometry,
+    isIdentity,
+    normalizedAspect,
+    fitRect,
+    dragRect,
+    turnedSize,
+  } from "./lib/geometry.js";
   import Histogram from "./lib/Histogram.svelte";
+  import CurveEditor from "./lib/CurveEditor.svelte";
   import {
     DEV_DEFAULTS,
+    MIXER_BANDS,
+    freshDev,
+    applyDetail,
     isDevelopSupported,
     develop,
     downscaleLinear,
@@ -33,7 +49,10 @@
 
   // One tool panel open at a time per mode, like a camera's quick menu.
   const TOOLS = {
-    editor: [["looks", "Looks"], ["light", "Light"], ["color", "Color"], ["film", "Film"]],
+    editor: [
+      ["looks", "Looks"], ["crop", "Crop"], ["light", "Light"], ["color", "Color"],
+      ["curve", "Curve"], ["mixer", "Mixer"], ["detail", "Detail"], ["film", "Film"],
+    ],
     framing: [
       ["templates", "Templates"], ["ratio", "Ratio"], ["border", "Border"], ["colors", "Colors"],
       ["caption", "Caption"], ["position", "Position"], ["logo", "Logo"],
@@ -47,7 +66,15 @@
     color: "M12 3s6 6.4 6 11a6 6 0 01-12 0c0-4.6 6-11 6-11z",
     film: "M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4",
     templates: "M4 4h16v16H4zM4 10h16M10 10v10",
-    ratio: "M6 2v14a2 2 0 002 2h14M2 6h14a2 2 0 012 2v14",
+    ratio: "M4 5h16v14H4zM4 5l16 14",
+    crop: "M6 2v14a2 2 0 002 2h14M2 6h14a2 2 0 012 2v14",
+    curve: "M3 3v18h18M3 20C9 20 10 5 21 4",
+    mixer: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h12M20 18h0M15 4v4M9 10v4M18 16v4",
+    detail: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 100 8 4 4 0 000-8z",
+    undo: "M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3",
+    redo: "M15 14l5-5-5-5M20 9H9a5 5 0 000 10h3",
+    compare: "M12 3v18M4 4h16v16H4z",
+    share: "M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7M16 6l-4-4-4 4M12 2v13",
     border: "M3 3h18v18H3zM7 7h10v10H7z",
     colors: "M12 3a9 9 0 100 18c1.1 0 1.6-.8 1.6-1.6 0-.9-.7-1.3-.7-2.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 004-4C21 6.8 17 3 12 3zM7.5 12h.01M9.5 7.5h.01M14.5 7.5h.01",
     caption: "M5 7V5h14v2M12 5v14M9 19h6",
@@ -66,6 +93,8 @@
     ["aperture", "Aperture", "ƒ/1.8"],
     ["shutterSpeed", "Shutter", "1/250s"],
     ["iso", "ISO", "ISO 100"],
+    ["date", "Date", "16 Oct 2026"],
+    ["note", "Note", "Kyoto, spring"],
   ];
   const QUICK_BACKGROUNDS = ["#ffffff", "#f1eee8", "#7d7d7a", "#000000"];
 
@@ -92,15 +121,82 @@
   let processedImage = $state.raw(null);
 
   // ─── Mode 1: Photo Editor State (Color, Light & Analog Effects) ─────────────
-  // All develop settings live in one object (see DEV_DEFAULTS) so looks, presets and reset stay one-liners.
-  let dev = $state({ ...DEV_DEFAULTS });
+  // Each photo keeps its own develop settings (item.dev, see DEV_DEFAULTS), like VSCO or Lightroom.
+  // `dev` is always the active photo's settings, so sliders, looks and presets edit just that photo.
+  const noPhotoDev = $state(freshDev());
+  const dev = $derived(activeItem?.dev ?? noPhotoDev);
   const canDevelop = isDevelopSupported();
+  let showOriginal = $state(false); // before/after: held while comparing
 
-  function resetColorAdjustments() {
-    Object.assign(dev, DEV_DEFAULTS);
+  // ─── Tone curve & colour mixer (immutable updates keep undo snapshots and looks independent) ─
+  let curveChannel = $state("rgb");
+  const CURVE_COLORS = { rgb: "#ffffff", r: "#ff6b6b", g: "#6bdc7a", b: "#6b9bff" };
+  const setCurve = (pts) => (dev.curve = { ...dev.curve, [curveChannel]: pts });
+  const resetCurve = () => (dev.curve = freshDev().curve);
+
+  let mixerBand = $state("red");
+  const MIXER_SWATCH = {
+    red: "#ff4d4d", orange: "#ff9a3c", yellow: "#ffe14d", green: "#4fd16b",
+    aqua: "#3fd6d0", blue: "#4d7dff", purple: "#9b5cff", magenta: "#ff4dc4",
+  };
+  const mixerValue = (i) => dev.mixer[mixerBand][i];
+  function setMixer(i, v) {
+    const band = [...dev.mixer[mixerBand]];
+    band[i] = v;
+    dev.mixer = { ...dev.mixer, [mixerBand]: band };
+  }
+  const bandChanged = (b) => dev.mixer[b].some((v) => v !== 0);
+
+  // ─── Crop, straighten, rotate ──────────────────────────────────────────────
+  const cropping = $derived(activeTab === "editor" && activeTool.editor === "crop" && Boolean(activeItem));
+  const crop = $derived(activeItem?.crop ?? CROP_DEFAULT);
+  // Turned image size (the crop rect is in fractions of it); the preview has the full image's proportions.
+  const turned = $derived(
+    activeItem ? turnedSize(activeItem.previewImage.width, activeItem.previewImage.height, crop.rot) : [1, 1],
+  );
+  const cropAspect = $derived(normalizedAspect(crop.ratio, turned[0], turned[1]));
+
+  function setCrop(patch) {
+    if (activeItem) activeItem.crop = { ...CROP_DEFAULT, ...activeItem.crop, ...patch };
+  }
+  function setCropRatio(id) {
+    const [W, H] = turned;
+    setCrop({ ratio: id, ...(id === "free" ? {} : fitRect(normalizedAspect(id, W, H))) });
+  }
+  function turnCrop(quarter) {
+    const rot = (crop.rot + quarter + 4) % 4;
+    const [W, H] = turnedSize(activeItem.previewImage.width, activeItem.previewImage.height, rot);
+    setCrop({ rot, ...fitRect(normalizedAspect(crop.ratio, W, H)) });
+  }
+  const resetCrop = () => activeItem && (activeItem.crop = null);
+
+  let cropDrag = null;
+  function startCropDrag(e, handle) {
+    e.preventDefault();
+    e.stopPropagation();
+    const box = e.currentTarget.closest(".print").getBoundingClientRect();
+    cropDrag = { handle, box, x: e.clientX, y: e.clientY, rect: { ...crop } };
+  }
+  function moveCropDrag(e) {
+    if (!cropDrag) return;
+    const { handle, box, x, y, rect } = cropDrag;
+    setCrop(dragRect(rect, handle, (e.clientX - x) / box.width, (e.clientY - y) / box.height, cropAspect));
+  }
+  // Arrow keys nudge the crop; with Shift they resize it from the bottom-right corner.
+  function cropKey(e) {
+    const step = 0.01;
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setCrop(dragRect(crop, e.shiftKey ? "se" : "move", d[0], d[1], cropAspect));
   }
 
-  const look = (id, name, params) => ({ id, name, params: { ...DEV_DEFAULTS, ...params } });
+  function resetColorAdjustments() {
+    Object.assign(dev, freshDev());
+  }
+
+  const look = (id, name, params) => ({ id, name, params: { ...freshDev(), ...params } });
   const LOOKS = [
     look("none", "Original", {}),
     look("raw-fix", "RAW lift", { exposure: 0.25, contrast: 15, highlights: -20, shadows: 25, vibrance: 20 }),
@@ -113,31 +209,64 @@
     look("bw-contrast", "Silver", { contrast: 35, whites: 10, blacks: -10, saturation: -100, filmGrain: 20 }),
   ];
 
-  const applyLook = (l) => Object.assign(dev, l.params);
-  const isLookActive = (l) => Object.keys(DEV_DEFAULTS).every((k) => l.params[k] === dev[k]);
+  // Copies (never shares) the look's nested curve and mixer, so later edits don't change the look itself.
+  const applyLook = (l) => Object.assign(dev, freshDev(), JSON.parse(JSON.stringify(l.params)));
+
+  // Copy the active photo's edits to every other selected photo.
+  function applyEditsToSelected() {
+    const src = $state.snapshot(dev);
+    for (const f of filesList) if (f.selected && f !== activeItem) Object.assign(f.dev, JSON.parse(JSON.stringify(src)));
+  }
+
+  // Your own looks ("recipes"), saved on this device.
+  const LOOKS_KEY = "mf_looks_v1";
+  let userLooks = $state([]);
+  try {
+    userLooks = JSON.parse(localStorage.getItem(LOOKS_KEY) || "[]");
+  } catch {}
+  const persistLooks = () => localStorage.setItem(LOOKS_KEY, JSON.stringify(userLooks));
+  const allLooks = $derived([...LOOKS, ...userLooks]);
+  function saveLook(name) {
+    userLooks = [...userLooks, { id: `look_user_${Date.now()}`, name, params: { ...freshDev(), ...$state.snapshot(dev) } }];
+    persistLooks();
+  }
+  function deleteLook(id) {
+    userLooks = userLooks.filter((l) => l.id !== id);
+    persistLooks();
+  }
+  // Deep compare: curve and mixer are nested.
+  const isLookActive = (l) =>
+    Object.keys(DEV_DEFAULTS).every(
+      (k) => JSON.stringify(l.params[k] ?? DEV_DEFAULTS[k]) === JSON.stringify(dev[k] ?? DEV_DEFAULTS[k]),
+    );
 
   // Look thumbnails rendered by the real develop engine from the active photo, so they match the result.
   let lookThumbs = $state({});
   $effect(() => {
-    const src = activeItem?.previewImage;
-    if (!src || !canDevelop) {
+    const small = activeItem?.small;
+    const looks = allLooks;
+    if (!small || !canDevelop) {
       lookThumbs = {};
       return;
     }
-    let small;
-    if (src.linear) {
-      small = downscaleLinear(src, 160);
-    } else {
-      small = document.createElement("canvas");
-      const k = 160 / Math.max(src.width, src.height);
-      small.width = Math.max(1, Math.round(src.width * k));
-      small.height = Math.max(1, Math.round(src.height * k));
-      small.getContext("2d").drawImage(src, 0, 0, small.width, small.height);
-    }
     const out = document.createElement("canvas");
-    lookThumbs = Object.fromEntries(
-      LOOKS.map((l) => [l.id, develop(small, l.params, out).toDataURL("image/jpeg", 0.8)]),
-    );
+    lookThumbs = Object.fromEntries(looks.map((l) => [l.id, develop(small, l.params, out).toDataURL("image/jpeg", 0.8)]));
+  });
+
+  // Strip thumbnails show each photo's own edits, refreshed shortly after they change.
+  $effect(() => {
+    if (!canDevelop) return;
+    const pending = filesList.map((f) => [f, JSON.stringify([f.dev, f.crop])]);
+    const t = setTimeout(() => {
+      const out = document.createElement("canvas");
+      for (const [f, key] of pending) {
+        if (f.thumbKey === key) continue;
+        const thumb = develop(f.small, f.dev, out);
+        f.thumbUrl = (isIdentity(f.crop) ? thumb : applyGeometry(thumb, f.crop)).toDataURL("image/jpeg", 0.8);
+        f.thumbKey = key;
+      }
+    }, 500);
+    return () => clearTimeout(t);
   });
 
   // ─── Mode 2: Frame & EXIF State ────────────────────────────────────────────
@@ -152,7 +281,11 @@
     { id: "custom", label: "Even border", w: null, h: null },
     { id: "3:2", label: "Print 3:2", w: 3, h: 2 },
     { id: "16:9", label: "Wide 16:9", w: 16, h: 9 },
+    // One wide frame cut into seamless 4:5 slides for an Instagram carousel.
+    { id: "carousel2", label: "Carousel × 2", w: 8, h: 5, slices: 2 },
+    { id: "carousel3", label: "Carousel × 3", w: 12, h: 5, slices: 3 },
   ];
+  const slices = $derived(RATIOS.find((r) => r.id === selectedRatioId)?.slices ?? 1);
   let selectedRatioId = $state("4:5");
 
   // Colors & Auto-Contrast
@@ -180,8 +313,34 @@
   ];
 
   // Fonts the user adds: installed ones (Chrome/Edge desktop) or uploaded files (every platform).
-  // shortcut: uploaded fonts last for this session only; persist them in IndexedDB if people ask.
+  // Both are remembered on this device (IndexedDB), so templates that use them keep working.
   let customFonts = $state([]);
+  const FONTS_KEY = "fonts"; // [{ kind: "file", family, buffer } | { kind: "local", family }]
+
+  async function rememberFont(entry) {
+    const saved = (await idbGet(FONTS_KEY)) ?? [];
+    await idbSet(FONTS_KEY, [...saved.filter((f) => f.family !== entry.family), entry]);
+  }
+
+  async function registerFile(family, buffer) {
+    const face = new FontFace(`mf-${family}`, buffer);
+    document.fonts.add(await face.load());
+    return { id: `file:${family}`, label: family, css: `"mf-${family}"` };
+  }
+
+  // Bring back fonts from earlier sessions without selecting them.
+  idbGet(FONTS_KEY).then(async (saved = []) => {
+    const restored = [];
+    for (const f of saved) {
+      try {
+        restored.push(
+          f.kind === "file" ? await registerFile(f.family, f.buffer) : { id: `local:${f.family}`, label: f.family, css: `"${f.family}"` },
+        );
+      } catch {} // a font that no longer loads is skipped
+    }
+    customFonts = [...restored.filter((r) => !customFonts.some((c) => c.id === r.id)), ...customFonts];
+    scheduleRender();
+  });
   const allFonts = $derived([...customFonts, ...SYSTEM_FONTS]);
   const canBrowseLocalFonts = typeof window !== "undefined" && "queryLocalFonts" in window;
   let localFamilies = $state([]);
@@ -204,7 +363,9 @@
   }
 
   function useLocalFont(family) {
-    if (family && localFamilies.includes(family)) addFont(`local:${family}`, family, `"${family}"`);
+    if (!family || !localFamilies.includes(family)) return;
+    addFont(`local:${family}`, family, `"${family}"`);
+    rememberFont({ kind: "local", family });
   }
 
   async function onFontFile(e) {
@@ -214,9 +375,10 @@
     fontError = "";
     const family = file.name.replace(/\.[^.]+$/, "");
     try {
-      const face = new FontFace(`mf-${family}`, await file.arrayBuffer());
-      document.fonts.add(await face.load());
-      addFont(`file:${family}`, family, `"mf-${family}"`);
+      const buffer = await file.arrayBuffer();
+      const f = await registerFile(family, buffer.slice(0));
+      addFont(f.id, f.label, f.css);
+      rememberFont({ kind: "file", family, buffer });
     } catch {
       fontError = `${file.name} is not a font this browser can read. Use a .ttf, .otf, .woff or .woff2 file.`;
     }
@@ -237,6 +399,8 @@
 
   // Checkboxes for which properties to display
   let exifDisplay = $state({
+    date: false,
+    note: true, // empty unless typed, so it only shows when you add one
     model: true,
     lens: true,
     focalLength: true,
@@ -347,6 +511,7 @@
   const PRESETS_STORAGE_KEY = "mf_layout_presets_v1";
   let userPresets = $state([]);
   let showSavePresetModal = $state(false);
+  let saveKind = $state("template"); // what the name dialog saves: "template" or "look"
   let newPresetName = $state("");
 
   // Built-in frame templates. Develop settings (grain, bloom) are only set where they define the style.
@@ -391,38 +556,89 @@
     localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(userPresets));
   }
 
+  // Every frame setting in one plain object: used by templates and by undo/redo.
+  const frameSnapshot = () => ({
+    customMarginH, customMarginV, captionSpace, selectedRatioId, backgroundColor, textColor, autoContrast,
+    textPosX, textPosY, textAlign, textZone, selectedFontId, autoFontSize, manualFontSize, showExif,
+    logoScale, logoOpacity, logoPosX, logoPosY, exifDisplay: { ...exifDisplay },
+  });
+
   function saveCurrentPreset(name) {
-    const trimmed = name?.trim();
-    if (!trimmed) return;
-    const newPreset = {
-      id: `preset_user_${Date.now()}`,
-      name: trimmed,
-      customMarginH,
-      customMarginV,
-      captionSpace,
-      selectedRatioId,
-      backgroundColor,
-      textColor,
-      autoContrast,
-      textPosX,
-      textPosY,
-      textAlign,
-      textZone,
-      selectedFontId,
-      autoFontSize,
-      manualFontSize,
-      showExif,
-      logoScale,
-      logoOpacity,
-      logoPosX,
-      logoPosY,
-      dev: { ...dev },
-      exifDisplay: { ...exifDisplay },
-    };
-    userPresets = [...userPresets, newPreset];
+    userPresets = [...userPresets, { id: `preset_user_${Date.now()}`, name, ...frameSnapshot(), dev: $state.snapshot(dev) }];
     persistPresets();
+  }
+
+  function saveNamed() {
+    const name = newPresetName.trim();
+    if (!name) return;
+    if (saveKind === "look") saveLook(name);
+    else saveCurrentPreset(name);
     showSavePresetModal = false;
     newPresetName = "";
+  }
+
+  // Back up or move your own templates and looks as one small file.
+  function exportLibrary() {
+    const data = { app: "MinimalFrame", version: 1, templates: $state.snapshot(userPresets), looks: $state.snapshot(userLooks) };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    triggerDownload(blob, `MinimalFrame_library_${new Date().toISOString().slice(0, 10)}.json`);
+  }
+
+  let libraryMessage = $state("");
+
+  // Imported files are untrusted: keep only known keys whose type matches the app's own values.
+  const cleanLabel = (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 60) : "Imported");
+  const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+  const isPoints = (v) =>
+    Array.isArray(v) && v.length >= 2 && v.length <= 16 && v.every((p) => Array.isArray(p) && p.length === 2 && p.every((n) => isNum(n) && n >= 0 && n <= 1));
+  function sanitizeDev(d) {
+    const out = freshDev();
+    if (!d || typeof d !== "object") return out;
+    for (const [k, v] of Object.entries(DEV_DEFAULTS)) if (typeof v === "number" && isNum(d[k])) out[k] = d[k];
+    for (const ch of ["rgb", "r", "g", "b"]) if (isPoints(d.curve?.[ch])) out.curve[ch] = d.curve[ch];
+    for (const band of MIXER_BANDS) {
+      const m = d.mixer?.[band];
+      if (Array.isArray(m) && m.length === 3 && m.every(isNum)) out.mixer[band] = m;
+    }
+    return out;
+  }
+  function sanitizeTemplate(t) {
+    const out = { name: cleanLabel(t?.name) };
+    if (!t || typeof t !== "object") return out;
+    for (const [k, v] of Object.entries(frameSnapshot())) {
+      if (k === "exifDisplay") continue;
+      if (typeof v === "number" ? isNum(t[k]) : typeof t[k] === typeof v) out[k] = t[k];
+    }
+    if (t.exifDisplay && typeof t.exifDisplay === "object") {
+      out.exifDisplay = Object.fromEntries(Object.keys(exifDisplay).filter((k) => typeof t.exifDisplay[k] === "boolean").map((k) => [k, t.exifDisplay[k]]));
+    }
+    if (t.dev) out.dev = sanitizeDev(t.dev);
+    return out;
+  }
+  async function importLibrary(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (data.app !== "MinimalFrame") throw new Error("not a MinimalFrame library file");
+      // Fresh ids so importing twice, or on top of your own, never overwrites anything.
+      const stamp = Date.now();
+      const list = (v) => (Array.isArray(v) ? v.slice(0, 500) : []);
+      const templates = list(data.templates).map((t, i) => ({ ...sanitizeTemplate(t), id: `preset_user_${stamp}_${i}` }));
+      const looks = list(data.looks).map((l, i) => ({
+        id: `look_user_${stamp}_${i}`,
+        name: cleanLabel(l?.name),
+        params: sanitizeDev(l?.params),
+      }));
+      userPresets = [...userPresets, ...templates];
+      userLooks = [...userLooks, ...looks];
+      persistPresets();
+      persistLooks();
+      libraryMessage = `Added ${templates.length} templates and ${looks.length} looks.`;
+    } catch (err) {
+      libraryMessage = `That file couldn't be imported: ${err.message}.`;
+    }
   }
 
   function deletePreset(id, e) {
@@ -433,6 +649,14 @@
 
   function applyPreset(p) {
     if (!p) return;
+    applyFrame(p);
+    // Built-in and older saved presets store develop values at the top level (old "brightness" has no equivalent and is ignored).
+    for (const k of Object.keys(DEV_DEFAULTS)) if (p[k] !== undefined) dev[k] = p[k];
+    if (p.dev) Object.assign(dev, p.dev);
+    scheduleRender(true);
+  }
+
+  function applyFrame(p) {
     if (p.customMarginH !== undefined) customMarginH = p.customMarginH;
     if (p.customMarginV !== undefined) customMarginV = p.customMarginV;
     captionSpace = p.captionSpace ?? 12;
@@ -452,13 +676,86 @@
     if (p.logoOpacity !== undefined) logoOpacity = p.logoOpacity;
     if (p.logoPosX !== undefined) logoPosX = p.logoPosX;
     if (p.logoPosY !== undefined) logoPosY = p.logoPosY;
-    // Built-in and older saved presets store develop values at the top level (old "brightness" has no equivalent and is ignored).
-    for (const k of Object.keys(DEV_DEFAULTS)) if (p[k] !== undefined) dev[k] = p[k];
-    if (p.dev) Object.assign(dev, p.dev);
     if (p.exifDisplay) exifDisplay = { ...exifDisplay, ...p.exifDisplay };
+  }
 
-    updateProcessedImage();
-    scheduleRender();
+  // ─── Undo / redo ───────────────────────────────────────────────────────────
+  // Snapshots of everything undoable (frame settings + the active photo's edits, crop and caption text),
+  // taken once changes settle so a slider drag is one step. Switching photos starts a fresh baseline.
+  const undoStack = [];
+  const redoStack = [];
+  let canUndo = $state(false);
+  let canRedo = $state(false);
+  let lastSnap = null;
+  let snapTimer;
+  const takeSnapshot = () =>
+    JSON.stringify({
+      id: activeItem?.id ?? null,
+      frame: frameSnapshot(),
+      dev: activeItem?.dev ?? null,
+      crop: activeItem?.crop ?? null,
+      exif: activeItem?.exifOverride ?? null,
+    });
+  function commitSnapshot(snap) {
+    clearTimeout(snapTimer);
+    if (snap === lastSnap) return;
+    if (lastSnap && JSON.parse(lastSnap).id === JSON.parse(snap).id) {
+      undoStack.push(lastSnap);
+      if (undoStack.length > 100) undoStack.shift();
+      redoStack.length = 0;
+    }
+    lastSnap = snap;
+    canUndo = undoStack.length > 0;
+    canRedo = false;
+  }
+  $effect(() => {
+    const snap = takeSnapshot();
+    clearTimeout(snapTimer);
+    snapTimer = setTimeout(() => commitSnapshot(snap), 350);
+  });
+  function restoreSnapshot(snap) {
+    const o = JSON.parse(snap);
+    applyFrame(o.frame);
+    const item = filesList.find((f) => f.id === o.id);
+    if (item) {
+      Object.assign(item.dev, o.dev);
+      item.crop = o.crop;
+      Object.assign(item.exifOverride, o.exif);
+    }
+    lastSnap = snap; // the change this causes is not a new step
+    canUndo = undoStack.length > 0;
+    canRedo = redoStack.length > 0;
+  }
+  function undo() {
+    commitSnapshot(takeSnapshot()); // flush an edit that hasn't settled yet
+    if (!undoStack.length) return;
+    redoStack.push(lastSnap);
+    restoreSnapshot(undoStack.pop());
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(lastSnap);
+    restoreSnapshot(redoStack.pop());
+  }
+
+  function onKeydown(e) {
+    const typing = e.target.closest?.("input[type=text], input:not([type]), textarea");
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "z" && !typing) {
+      e.preventDefault();
+      e.shiftKey ? redo() : undo();
+    } else if (mod && e.key.toLowerCase() === "y" && !typing) {
+      e.preventDefault();
+      redo();
+    } else if (e.key === "\\" && !e.repeat && !typing) {
+      showOriginal = true;
+    } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && !e.target.closest?.("input, textarea")) {
+      const n = filesList.length;
+      if (n > 1) setActiveImage((activeImageIndex + (e.key === "ArrowRight" ? 1 : n - 1)) % n);
+    }
+  }
+  function onKeyup(e) {
+    if (e.key === "\\") showOriginal = false;
   }
 
   onMount(() => {
@@ -499,16 +796,40 @@
     const { canvasW: w, canvasH: h } =
       mode === "framed" ? layoutFrame(photoW, photoH, exifOverride) : { canvasW: photoW, canvasH: photoH };
     // shortcut: rounding can land the Instagram width at 1079–1081px; Instagram resamples it anyway.
-    return Math.min(1, s.width ? s.width / w : s.long / Math.max(w, h));
+    // Carousel: the Instagram width applies to each slide.
+    const width = s.width && mode === "framed" ? s.width * slices : s.width;
+    return Math.min(1, width ? width / w : s.long / Math.max(w, h));
   }
 
-  /** Size label for a preset, from the current photo. */
-  function sizeLabel(s, mode) {
+  /** Output pixel size for a preset, from the current photo. */
+  function targetDims(s, mode) {
     const { w, h } = mode === "framed" ? framedSize : photoSize;
-    if (!w) return "";
-    const k = Math.min(1, s.width ? s.width / w : s.long ? s.long / Math.max(w, h) : 1);
-    return `${Math.round(w * k)} × ${Math.round(h * k)}`;
+    const width = s.width && mode === "framed" ? s.width * slices : s.width;
+    const k = Math.min(1, width ? width / w : s.long ? s.long / Math.max(w, h) : 1);
+    return { w: Math.round(w * k), h: Math.round(h * k) };
   }
+  function sizeLabel(s, mode) {
+    const { w, h } = targetDims(s, mode);
+    return w ? `${w} × ${h}` : "";
+  }
+
+  // Estimated file size: encode the framed preview with the chosen settings and scale by pixel count.
+  // shortcut: small previews compress a little worse than full-size photos, so this tends to overestimate.
+  let exportOpen = $state(false);
+  let sizeEstimate = $state("");
+  $effect(() => {
+    if (!exportOpen || !processedImage || !activeItem) return;
+    const s = EXPORT_SIZES.find((x) => x.id === exportPrefs.size);
+    const { w, h } = targetDims(s, "framed");
+    const sample = drawFramed(document.createElement("canvas"), processedImage, activeItem.exifOverride);
+    let cancelled = false;
+    encodeCanvas(sample).then(({ blob }) => {
+      if (cancelled) return;
+      const bytes = (blob.size / (sample.width * sample.height)) * w * h;
+      sizeEstimate = bytes > 1e6 ? `about ${(bytes / 1e6).toFixed(1)} MB` : `about ${Math.max(1, Math.round(bytes / 1e3))} KB`;
+    });
+    return () => (cancelled = true);
+  });
 
   /** Encodes a canvas with the chosen format; the extension follows what the browser actually produced. */
   async function encodeCanvas(canvas) {
@@ -560,8 +881,9 @@
   }
 
   // ─── Dynamic Font Sizing Math ──────────────────────────────────────────────
+  // Fewer camera fields → larger text (date and note are extra lines and don't count).
   const selectedExifCount = $derived(
-    Object.values(exifDisplay).filter(Boolean).length,
+    ["model", "lens", "focalLength", "aperture", "shutterSpeed", "iso"].filter((k) => exifDisplay[k]).length,
   );
 
   const dynamicScaleFactor = $derived(
@@ -683,6 +1005,15 @@
     return Math.round(((Math.atan2(sy, sx) * 180) / Math.PI + 360) % 360);
   }
 
+  // Border colour suggestions from the photo itself.
+  function photoPalette(source) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 40;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    x.drawImage(source, 0, 0, 40, 40);
+    return extractPalette(x.getImageData(0, 0, 40, 40).data, 5);
+  }
+
   // ─── Filmstrip Thumbnail Generator ─────────────────────────────────────────
   function createThumbnail(baseCanvas) {
     const thumb = document.createElement("canvas");
@@ -730,6 +1061,7 @@
               "FNumber",
               "ExposureTime",
               "ISO",
+              "DateTimeOriginal",
             ],
           });
           if (rawExif?.Orientation) {
@@ -746,7 +1078,7 @@
         // Browsers auto-rotate standard JPEG/HEIC; RAW embedded previews carry no orientation, so rotate those manually.
         let orientationTag = 1;
 
-        let previewImage, fullW, fullH, thumbSource;
+        let previewImage, fullW, fullH, thumbSource, small;
         // True RAW editing needs the GPU engine; without WebGL2, fall back to an 8-bit JPEG rendering.
         const linearRaw = isRaw && canDevelop;
 
@@ -764,7 +1096,8 @@
           previewImage = downscaleLinear(half, 1080);
           fullW = half.width * 2;
           fullH = half.height * 2;
-          thumbSource = develop(downscaleLinear(previewImage, 160), DEV_DEFAULTS);
+          small = downscaleLinear(previewImage, 160);
+          thumbSource = develop(small, DEV_DEFAULTS);
           sourceBlob = null;
         } else {
           if (isRaw) {
@@ -786,11 +1119,17 @@
           fullH = isRotated90 ? bitmap.width : bitmap.height;
           bitmap.close();
           thumbSource = previewImage;
+          small = document.createElement("canvas");
+          const k = 160 / Math.max(previewImage.width, previewImage.height);
+          small.width = Math.max(1, Math.round(previewImage.width * k));
+          small.height = Math.max(1, Math.round(previewImage.height * k));
+          small.getContext("2d").drawImage(previewImage, 0, 0, small.width, small.height);
         }
 
         // 5. Filmstrip Thumbnail (120px)
         const thumbUrl = createThumbnail(thumbSource);
         const hue = dominantHue(thumbSource);
+        const palette = photoPalette(thumbSource);
 
         // 6. Initial Editable EXIF Override values
         const cameraName =
@@ -805,6 +1144,10 @@
             ? fmtExposure(rawExif.ExposureTime)
             : "";
         const iso = rawExif?.ISO != null ? `ISO\u2009${rawExif.ISO}` : "";
+        const taken = rawExif?.DateTimeOriginal instanceof Date ? rawExif.DateTimeOriginal : null;
+        const date = taken
+          ? taken.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+          : "";
 
         newItems.push({
           id: `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
@@ -820,8 +1163,12 @@
           rawBadge,
           orientationTag,
           hue,
+          palette,
           rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
           selected: true,                   // included in batch export
+          small,                            // 160px source for looks and strip thumbnails
+          dev: freshDev(),                  // this photo's own edits
+          crop: null,                       // this photo's crop / rotation (see geometry.js)
           exifOverride: {
             model: cameraName,
             lens: lensName,
@@ -829,6 +1176,8 @@
             aperture: aperture,
             shutterSpeed: shutterSpeed,
             iso: iso,
+            date,
+            note: "",
           },
         });
       } catch (err) {
@@ -921,18 +1270,19 @@
 
   // ─── Develop (GPU) ─────────────────────────────────────────────────────────
   // GPU develop when available; otherwise a CSS-filter approximation (exposure, contrast, saturation only).
-  function developCanvas(source, target) {
-    if (canDevelop) return develop(source, dev, target);
+  function developCanvas(source, target, params = dev) {
+    if (canDevelop) return develop(source, params, target);
     target.width = source.width;
     target.height = source.height;
     const ctx = target.getContext("2d", { alpha: false });
-    ctx.filter = cssFilterFor(dev);
+    ctx.filter = cssFilterFor(params);
     ctx.drawImage(source, 0, 0);
     return target;
   }
 
   // Live preview develops only the ≤1080px proxy; grain and bloom are CSS overlays until export.
   let previewWorkCanvas = null;
+  let previewGeoCanvas = null;
   let histo = $state.raw(null);
   function updateProcessedImage() {
     const base = activeItem?.previewImage;
@@ -941,7 +1291,16 @@
       return;
     }
     // Reuse one canvas across slider ticks instead of allocating a new one per frame.
-    processedImage = developCanvas(base, (previewWorkCanvas ??= document.createElement("canvas")));
+    const params = showOriginal ? DEV_DEFAULTS : dev;
+    const developed = applyDetail(
+      developCanvas(base, (previewWorkCanvas ??= document.createElement("canvas")), params),
+      params,
+    );
+    // While cropping, show the whole turned/straightened photo so the crop box can be moved over it.
+    const geo = showOriginal ? null : cropping ? { ...crop, x: 0, y: 0, w: 1, h: 1 } : activeItem.crop;
+    processedImage = isIdentity(geo)
+      ? developed
+      : applyGeometry(developed, geo, (previewGeoCanvas ??= document.createElement("canvas")));
     histo = histogram(processedImage);
   }
 
@@ -970,6 +1329,11 @@
     if (settings.length > 0) {
       lines.push({ type: "settings", text: settings.join("  ·  ") });
     }
+
+    const extra = [];
+    if (display.note && override.note?.trim()) extra.push(override.note.trim());
+    if (display.date && override.date?.trim()) extra.push(override.date.trim());
+    if (extra.length) lines.push({ type: "extra", text: extra.join("  ·  ") });
 
     return lines;
   }
@@ -1071,12 +1435,12 @@
     if (!canvasEl || !processedImage || !activeItem) return;
     const srcW = processedImage.width;
     const srcH = processedImage.height;
-    const fullScale = (activeItem.fullW || srcW) / srcW;
+    const fullScale = (activeItem.fullW || activeItem.previewImage.width) / activeItem.previewImage.width;
 
     // Full-resolution sizes for the info line and the export sheet.
     const L = layoutFrame(srcW, srcH, activeItem.exifOverride);
     framedSize = { w: Math.round(L.canvasW * fullScale), h: Math.round(L.canvasH * fullScale) };
-    photoSize = { w: activeItem.fullW || srcW, h: activeItem.fullH || srcH };
+    photoSize = { w: Math.round(srcW * fullScale), h: Math.round(srcH * fullScale) };
 
     if (activeTab === "editor") {
       // Edit mode shows the photo alone for clear colour judgement.
@@ -1094,6 +1458,9 @@
     // When activeItem changes or color sliders move, schedule image update + canvas render
     const _ai = activeItem;
     const _dev = JSON.stringify(dev); // every develop slider
+    const _orig = showOriginal;
+    const _crop = JSON.stringify(activeItem?.crop);
+    const _cropping = cropping;
 
     scheduleRender(true);
   });
@@ -1150,16 +1517,27 @@
     let colorCanvas;
     if (item.linearRaw) {
       const raw = await decodeRawLinear(item.file);
-      colorCanvas = develop(raw, dev);
+      colorCanvas = develop(raw, item.dev);
     } else {
       const bitmap = await decodeUpright(item.sourceBlob);
       const sourceCanvas =
         item.orientationTag > 1
           ? applyExifOrientation(bitmap, item.orientationTag)
           : bitmap;
-      colorCanvas = developCanvas(sourceCanvas, document.createElement("canvas"));
+      colorCanvas = developCanvas(sourceCanvas, document.createElement("canvas"), item.dev);
       bitmap.close();
       if (sourceCanvas !== bitmap) sourceCanvas.width = sourceCanvas.height = 0;
+    }
+
+    const detailed = applyDetail(colorCanvas, item.dev);
+    if (detailed !== colorCanvas) {
+      colorCanvas.width = colorCanvas.height = 0;
+      colorCanvas = detailed;
+    }
+    if (!isIdentity(item.crop)) {
+      const turned = applyGeometry(colorCanvas, item.crop);
+      colorCanvas.width = colorCanvas.height = 0;
+      colorCanvas = turned;
     }
 
     // Size preset: shrink before grain and bloom so they keep their look at small sizes.
@@ -1176,8 +1554,8 @@
     }
 
     // 3. Heavy Pixel Math (Film Grain & Soft Bloom) executed strictly on export!
-    if (dev.softBloom > 0 || dev.filmGrain > 0) {
-      applyAnalogEffects(colorCanvas, { grain: dev.filmGrain, bloom: dev.softBloom });
+    if (item.dev.softBloom > 0 || item.dev.filmGrain > 0) {
+      applyAnalogEffects(colorCanvas, { grain: item.dev.filmGrain, bloom: item.dev.softBloom });
     }
 
     if (mode === "edited") {
@@ -1192,136 +1570,142 @@
     return framed;
   }
 
-  // ─── Single Image Downloader ───────────────────────────────────────────────
-  async function downloadImage(mode = "auto") {
-    if (!processedImage || !activeItem) return;
+  // ─── Saving and sharing ────────────────────────────────────────────────────
+  const cleanName = (name, fallback) =>
+    name.replace(/\.[^.]+$/, "").replace(/[^\p{L}\p{N}_\-\s]/gu, "").trim() || fallback;
 
+  /** Cuts a carousel frame into equal slides (the last one takes any rounding remainder). */
+  function sliceCanvas(canvas, n) {
+    const w = Math.round(canvas.width / n);
+    return Array.from({ length: n }, (_, i) => {
+      const part = document.createElement("canvas");
+      part.width = i === n - 1 ? canvas.width - w * i : w;
+      part.height = canvas.height;
+      part.getContext("2d").drawImage(canvas, w * i, 0, part.width, part.height, 0, 0, part.width, part.height);
+      return part;
+    });
+  }
+
+  /** Renders one photo for export: one file, or one per slide for carousel ratios. */
+  async function renderFiles(item, mode, index = 0) {
+    const canvas = await generateFullResExportCanvas(item, mode);
+    if (!canvas) throw new Error("could not render the photo");
+    const base = `${cleanName(item.name, `photo_${index + 1}`)}_${mode === "edited" ? "edited" : "framed"}`;
+    const n = mode === "framed" ? slices : 1;
+    const parts = n > 1 ? sliceCanvas(canvas, n) : [canvas];
+    const files = [];
+    for (let i = 0; i < parts.length; i++) {
+      const { blob, ext } = await encodeCanvas(parts[i]);
+      files.push({ name: n > 1 ? `${base}_${i + 1}of${n}.${ext}` : `${base}.${ext}`, blob });
+      parts[i].width = parts[i].height = 0;
+    }
+    canvas.width = canvas.height = 0;
+    return files;
+  }
+
+  async function zipFiles(files) {
+    const zip = new JSZip();
+    for (const f of files) zip.file(f.name, f.blob);
+    return zip.generateAsync({ type: "blob" }, (m) => (batchProgress.percent = Math.round(m.percent)));
+  }
+
+  function triggerDownload(blob, filename) {
+    if (fallbackDownloadUrl?.startsWith("blob:")) URL.revokeObjectURL(fallbackDownloadUrl);
+    fallbackDownloadUrl = URL.createObjectURL(blob);
+    fallbackFilename = filename;
+    // Explicit extension in `download` avoids Chrome's extensionless-blob bug.
+    const link = document.createElement("a");
+    link.style.display = "none";
+    link.href = fallbackDownloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    // Keep the blob alive for the manual fallback link; it is revoked on the next export or on Clear All.
+    setTimeout(() => link.remove(), 2000);
+  }
+
+  function flashStatus(text) {
+    downloadStatus = text;
+    setTimeout(() => downloadStatus === text && (downloadStatus = ""), 5000);
+  }
+
+  async function downloadImage(mode = "framed") {
+    if (!processedImage || !activeItem) return;
     isDownloading = true;
     downloadStatus = "Exporting…";
-
     try {
-      const exportType =
-        mode === "auto" ? (activeTab === "editor" ? "edited" : "framed") : mode;
-
-      // Yield briefly to let UI show the status message
-      await new Promise((r) => setTimeout(r, 20));
-
-      // Build final image using original full-resolution source and full effectsEngine
-      const exportCanvas = await generateFullResExportCanvas(
-        activeItem,
-        exportType,
-      );
-
-      if (!exportCanvas) throw new Error("Could not generate export canvas");
-
-      const rawName = activeItem.name
-        ? activeItem.name.replace(/\.[^.]+$/, "")
-        : "photo";
-      const cleanName =
-        rawName.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim() || "photo";
-      const suffix = exportType === "edited" ? "_edited" : "_framed";
-      const { blob, ext } = await encodeCanvas(exportCanvas);
-      exportCanvas.width = exportCanvas.height = 0;
-      const filename = `${cleanName}${suffix}.${ext}`;
-      fallbackFilename = filename;
-
-      if (fallbackDownloadUrl && fallbackDownloadUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(fallbackDownloadUrl);
+      await new Promise((r) => setTimeout(r, 20)); // let the status paint
+      const files = await renderFiles(activeItem, mode);
+      if (files.length === 1) {
+        triggerDownload(files[0].blob, files[0].name);
+        flashStatus(`Saved ${files[0].name}`);
+      } else {
+        const name = `${cleanName(activeItem.name, "photo")}_carousel.zip`;
+        triggerDownload(await zipFiles(files), name);
+        flashStatus(`Saved ${files.length} slides to ${name}`);
       }
-      const downloadUrl = URL.createObjectURL(blob);
-      fallbackDownloadUrl = downloadUrl;
-
-      // Explicit extension in `download` avoids Chrome's extensionless-blob bug.
-      const link = document.createElement("a");
-      link.style.display = "none";
-      link.href = downloadUrl;
-      link.setAttribute("download", filename);
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      // Keep the blob alive for the manual fallback link; it is revoked on the next export or on Clear All.
-      setTimeout(() => link.remove(), 2000);
-
-      downloadStatus = `Saved ${filename}`;
-      setTimeout(() => {
-        downloadStatus = "";
-      }, 4000);
     } catch (err) {
       console.error("[MinimalFrame] Download failed:", err);
-      loadError = `Download failed: ${err.message}`;
+      loadError = `Export failed: ${err.message}`;
       downloadStatus = "Export failed. See the message above the photo.";
     } finally {
       isDownloading = false;
     }
   }
 
-  // ─── Batch Export All (.zip) with JSZip ────────────────────────────────────
+  // Native share sheet (Android/iOS browsers, installed PWA): sends the photo straight to Instagram & co.
+  const canShareFiles =
+    typeof navigator !== "undefined" &&
+    Boolean(navigator.canShare?.({ files: [new File([""], "x.jpg", { type: "image/jpeg" })] }));
+  let pendingShare = $state.raw(null); // files ready but the browser wants a fresh tap to share them
+
+  async function shareFiles(files) {
+    try {
+      await navigator.share({ files: files.map((f) => new File([f.blob], f.name, { type: f.blob.type })) });
+      pendingShare = null;
+      flashStatus("Shared");
+    } catch (err) {
+      if (err.name === "AbortError") return; // closed the share sheet
+      // Rendering can outlast the tap that started it; keep the files and ask for one more tap.
+      if (err.name === "NotAllowedError") pendingShare = files;
+      else throw err;
+    }
+  }
+
+  async function shareImage() {
+    if (!activeItem) return;
+    isDownloading = true;
+    downloadStatus = "Preparing…";
+    try {
+      await shareFiles(await renderFiles(activeItem, "framed"));
+      if (pendingShare) downloadStatus = "Ready to share";
+    } catch (err) {
+      console.error("[MinimalFrame] Share failed:", err);
+      loadError = `Share failed: ${err.message}`;
+      downloadStatus = "";
+    } finally {
+      isDownloading = false;
+    }
+  }
+
+  // ─── Batch export (.zip) ───────────────────────────────────────────────────
   async function exportBatch(mode = "framed") {
     const batch = filesList.filter((item) => item.selected);
     if (batch.length === 0) return;
-
     isBatchExporting = true;
     const total = batch.length;
     batchProgress = { current: 0, total, percent: 0, filename: "" };
-
     try {
-      let zip = new JSZip();
-
+      const files = [];
       for (let i = 0; i < total; i++) {
-        const item = batch[i];
-        batchProgress = {
-          current: i + 1,
-          total,
-          percent: Math.round(((i + 1) / total) * 100),
-          filename: `Processing ${item.name} (full-res)…`,
-        };
-
-        // Yield to main thread so UI updates progress bar smoothly
-        await new Promise((resolve) => setTimeout(resolve, 20));
-
-        // Generate full-res framed canvas with pixel-level grain/bloom
-        const exportCanvas = await generateFullResExportCanvas(
-          item,
-          mode,
-        );
-        if (!exportCanvas) continue;
-
-        const { blob, ext } = await encodeCanvas(exportCanvas);
-        exportCanvas.width = exportCanvas.height = 0;
-        const rawName = item.name.replace(/\.[^.]+$/, "");
-        const cleanName = rawName.replace(/[^a-zA-Z0-9_\-\s]/g, "").trim() || `photo_${i + 1}`;
-        zip.file(`${mode}_${cleanName}.${ext}`, blob);
+        batchProgress = { current: i + 1, total, percent: Math.round(((i + 1) / total) * 100), filename: batch[i].name };
+        await new Promise((r) => setTimeout(r, 20)); // let the progress bar paint
+        files.push(...(await renderFiles(batch[i], mode, i)));
       }
-
-      batchProgress.filename = "Compressing ZIP package…";
-      await new Promise((resolve) => setTimeout(resolve, 30));
-
-      const zipBlob = await zip.generateAsync({ type: "blob" }, (metadata) => {
-        batchProgress.percent = Math.round(metadata.percent);
-      });
-
-      // Clear JSZip instance immediately to free RAM on mobile devices
-      zip = null;
-
-      const zipUrl = URL.createObjectURL(zipBlob);
-      const zipFilename = `MinimalFrame_Batch_${Date.now()}.zip`;
-
-      const link = document.createElement("a");
-      link.style.display = "none";
-      link.href = zipUrl;
-      link.setAttribute("download", zipFilename);
-      link.download = zipFilename;
-      document.body.appendChild(link);
-      link.click();
-      setTimeout(() => {
-        link.remove();
-        URL.revokeObjectURL(zipUrl);
-      }, 4000);
-
-      downloadStatus = `Saved ${total} photos to ${zipFilename}`;
-      setTimeout(() => {
-        downloadStatus = "";
-      }, 5000);
+      batchProgress.filename = "Packing the ZIP…";
+      const name = `MinimalFrame_${new Date().toISOString().slice(0, 10)}_${total}photos.zip`;
+      triggerDownload(await zipFiles(files), name);
+      flashStatus(`Saved ${total} photos to ${name}`);
     } catch (err) {
       console.error("[MinimalFrame] Batch export error:", err);
       loadError = `Batch export failed: ${err.message}`;
@@ -1364,6 +1748,14 @@
   aria-hidden="true"
 />
 
+<svelte:window
+  onkeydown={onKeydown}
+  onkeyup={onKeyup}
+  onpointermove={moveCropDrag}
+  onpointerup={() => (cropDrag = null)}
+  onblur={() => (showOriginal = false)}
+/>
+
 {#snippet icon(name)}
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d={ICONS[name]} /></svg>
 {/snippet}
@@ -1396,7 +1788,28 @@
       </p>
     {/if}
     {#if processedImage}
-      <button class="btn accent bar-export" onclick={() => exportDialog?.showModal()}>
+      <div class="bar-tools">
+        <button class="icon-btn" onclick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)">{@render icon("undo")}</button>
+        <button class="icon-btn" onclick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">{@render icon("redo")}</button>
+        <button
+          class="icon-btn"
+          class:on={showOriginal}
+          aria-label="Hold to see the original"
+          title="Hold to see the original (\)"
+          onpointerdown={() => (showOriginal = true)}
+          onpointerup={() => (showOriginal = false)}
+          onpointerleave={() => (showOriginal = false)}
+          onkeydown={(e) => (e.key === " " || e.key === "Enter") && (showOriginal = true)}
+          onkeyup={() => (showOriginal = false)}
+        >{@render icon("compare")}</button>
+      </div>
+      <button
+        class="btn accent bar-export"
+        onclick={() => {
+          exportDialog?.showModal();
+          exportOpen = true;
+        }}
+      >
         {@render icon("export")}Export
       </button>
     {/if}
@@ -1418,6 +1831,34 @@
           <div class="fx-grain" style:opacity={(dev.filmGrain / 100) * 0.75} aria-hidden="true"></div>
         {/if}
         {#key activeItem?.id}<div class="develop" aria-hidden="true"></div>{/key}
+        {#if showOriginal}<span class="badge">Original</span>{/if}
+        {#if activeTab === "framing" && slices > 1}
+          {#each Array.from({ length: slices - 1 }, (_, i) => i + 1) as i (i)}
+            <span class="slice-line" style:left="{(i / slices) * 100}%" aria-hidden="true"></span>
+          {/each}
+        {/if}
+        {#if cropping && !showOriginal}
+          <div class="crop-layer">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div
+              class="crop-box"
+              role="group"
+              tabindex="0"
+              aria-label="Crop area. Arrow keys move it, Shift plus arrow keys resize it."
+              style:left="{crop.x * 100}%"
+              style:top="{crop.y * 100}%"
+              style:width="{crop.w * 100}%"
+              style:height="{crop.h * 100}%"
+              onpointerdown={(e) => startCropDrag(e, "move")}
+              onkeydown={cropKey}
+            >
+              <span class="third v1"></span><span class="third v2"></span><span class="third h1"></span><span class="third h2"></span>
+              {#each ["nw", "ne", "sw", "se"] as h (h)}
+                <span class="handle {h}" onpointerdown={(e) => startCropDrag(e, h)} aria-hidden="true"></span>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -1510,18 +1951,65 @@
           {/if}
           {#if tool === "looks"}
             <div class="looks">
-              {#each LOOKS as look (look.id)}
-                <button class="look" aria-pressed={isLookActive(look)} onclick={() => applyLook(look)}>
-                  {#if lookThumbs[look.id]}
-                    <img src={lookThumbs[look.id]} alt="" />
-                  {:else}
-                    <img src={activeItem?.thumbUrl} alt="" style:filter={cssFilterFor(look.params)} />
+              {#each allLooks as look (look.id)}
+                <div class="look-cell">
+                  <button class="look" aria-pressed={isLookActive(look)} onclick={() => applyLook(look)}>
+                    {#if lookThumbs[look.id]}
+                      <img src={lookThumbs[look.id]} alt="" />
+                    {:else}
+                      <img src={activeItem?.thumbUrl} alt="" style:filter={cssFilterFor(look.params)} />
+                    {/if}
+                    <span>{look.name}</span>
+                  </button>
+                  {#if userLooks.includes(look)}
+                    <button class="mini-del" onclick={() => deleteLook(look.id)} aria-label="Delete look {look.name}">×</button>
                   {/if}
-                  <span>{look.name}</span>
-                </button>
+                </div>
               {/each}
             </div>
-            <button class="btn ghost" onclick={resetColorAdjustments}>Reset all edits</button>
+            <div class="row-btns">
+              <button
+                class="btn ghost"
+                onclick={() => {
+                  saveKind = "look";
+                  newPresetName = "";
+                  showSavePresetModal = true;
+                }}>Save as my look</button
+              >
+              <button class="btn ghost" onclick={resetColorAdjustments}>Reset all edits</button>
+            </div>
+            {#if selectedCount > 1}
+              <button class="btn ghost" onclick={applyEditsToSelected}>Apply these edits to the other {selectedCount - 1} selected</button>
+            {/if}
+          {:else if tool === "crop"}
+            <div class="stack">
+              <div>
+                <p class="label">Crop ratio</p>
+                <div class="seg wrap">
+                  {#each CROP_RATIOS as r (r.id)}
+                    <button aria-pressed={crop.ratio === r.id} onclick={() => setCropRatio(r.id)}>{r.label}</button>
+                  {/each}
+                </div>
+              </div>
+              <Dial
+                id="d-straighten"
+                label="Straighten"
+                bind:value={() => crop.angle, (v) => setCrop({ angle: v })}
+                min={-45}
+                max={45}
+                step={0.1}
+                unit="°"
+                reset={0}
+                signed
+              />
+              <div class="row-btns">
+                <button class="btn ghost" onclick={() => turnCrop(-1)}>Rotate left</button>
+                <button class="btn ghost" onclick={() => turnCrop(1)}>Rotate right</button>
+                <button class="btn ghost" onclick={() => setCrop({ flip: !crop.flip })}>Flip</button>
+              </div>
+              <button class="btn ghost" onclick={resetCrop} disabled={isIdentity(activeItem?.crop)}>Reset crop</button>
+              <p class="hint">Drag the box or its corners. The crop shows on the photo when you switch to another tool.</p>
+            </div>
           {:else if tool === "light"}
             <div class="stack">
               <Dial id="d-exposure" label="Exposure" bind:value={dev.exposure} min={-3} max={3} step={0.05} unit="EV" reset={0} signed />
@@ -1538,6 +2026,42 @@
               <Dial id="d-vibrance" label="Vibrance" bind:value={dev.vibrance} min={-100} max={100} reset={0} signed />
               <Dial id="d-saturation" label="Saturation" bind:value={dev.saturation} min={-100} max={100} reset={0} signed />
               <p class="hint">Vibrance boosts muted colors and protects skin tones. Saturation moves every color equally.</p>
+            </div>
+          {:else if tool === "curve"}
+            <div class="stack">
+              <div class="seg">
+                {#each [["rgb", "RGB"], ["r", "Red"], ["g", "Green"], ["b", "Blue"]] as [ch, name] (ch)}
+                  <button aria-pressed={curveChannel === ch} onclick={() => (curveChannel = ch)}>{name}</button>
+                {/each}
+              </div>
+              <CurveEditor points={dev.curve[curveChannel]} onchange={setCurve} color={CURVE_COLORS[curveChannel]} label="{curveChannel.toUpperCase()} curve" />
+              <p class="hint">Click to add a point, drag to shape the curve, double-click a point to remove it.</p>
+              <button class="btn ghost" onclick={resetCurve}>Reset curves</button>
+            </div>
+          {:else if tool === "mixer"}
+            <div class="stack">
+              <div class="bands" role="group" aria-label="Color band">
+                {#each MIXER_BANDS as b (b)}
+                  <button
+                    class="band"
+                    class:changed={bandChanged(b)}
+                    style:--c={MIXER_SWATCH[b]}
+                    aria-pressed={mixerBand === b}
+                    aria-label={b}
+                    onclick={() => (mixerBand = b)}
+                  ></button>
+                {/each}
+              </div>
+              <Dial id="d-mix-h" label="{mixerBand[0].toUpperCase() + mixerBand.slice(1)} hue" bind:value={() => mixerValue(0), (v) => setMixer(0, v)} min={-100} max={100} reset={0} signed />
+              <Dial id="d-mix-s" label="Saturation" bind:value={() => mixerValue(1), (v) => setMixer(1, v)} min={-100} max={100} reset={0} signed />
+              <Dial id="d-mix-l" label="Luminance" bind:value={() => mixerValue(2), (v) => setMixer(2, v)} min={-100} max={100} reset={0} signed />
+              <p class="hint">Shift one color without touching the rest: warmer greens, deeper blue skies, softer skin.</p>
+            </div>
+          {:else if tool === "detail"}
+            <div class="stack">
+              <Dial id="d-clarity" label="Clarity" bind:value={dev.clarity} min={-100} max={100} reset={0} signed />
+              <Dial id="d-sharpen" label="Sharpen" bind:value={dev.sharpen} unit="%" reset={0} />
+              <p class="hint">Clarity adds mid-tone punch; negative clarity softens. Sharpen crisps fine detail.</p>
             </div>
           {:else if tool === "film"}
             <div class="stack">
@@ -1576,10 +2100,19 @@
             <button
               class="btn ghost"
               onclick={() => {
+                saveKind = "template";
                 newPresetName = "";
                 showSavePresetModal = true;
               }}>Save current settings as a template</button
             >
+            <div class="row-btns">
+              <button class="btn ghost" onclick={exportLibrary} disabled={!userPresets.length && !userLooks.length}>Back up my templates and looks</button>
+              <label class="btn ghost">
+                Import
+                <input type="file" accept=".json,application/json" onchange={importLibrary} class="sr-only" />
+              </label>
+            </div>
+            {#if libraryMessage}<p class="hint" role="status">{libraryMessage}</p>{/if}
           {:else if tool === "ratio"}
             <div class="ratios">
               {#each RATIOS as r (r.id)}
@@ -1589,6 +2122,9 @@
                 </button>
               {/each}
             </div>
+            {#if slices > 1}
+              <p class="hint">Exports {slices} separate 4:5 slides that line up seamlessly when people swipe your carousel.</p>
+            {/if}
           {:else if tool === "border"}
             <div class="stack">
               <Dial id="d-margin-h" label="Sides" bind:value={customMarginH} min={0} max={40} unit="%" reset={8} />
@@ -1612,6 +2148,16 @@
                   </label>
                 </div>
               </div>
+              {#if activeItem?.palette?.length}
+                <div>
+                  <p class="label">From this photo</p>
+                  <div class="swatches">
+                    {#each activeItem.palette.flatMap((c) => [tint(c), c]) as c (c)}
+                      <button class="swatch" style:background={c} aria-pressed={backgroundColor.toLowerCase() === c} aria-label="Border color {c}" onclick={() => (backgroundColor = c)}></button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
               <label class="switch">
                 <input type="checkbox" role="switch" bind:checked={autoContrast} />
                 <span class="switch-track" aria-hidden="true"></span>
@@ -1782,6 +2328,7 @@
       if (e.target === exportDialog && !isBatchExporting) exportDialog.close();
     }}
     oncancel={(e) => isBatchExporting && e.preventDefault()}
+    onclose={() => (exportOpen = false)}
   >
     <div class="sheet-in">
       <div class="sheet-head">
@@ -1826,6 +2373,7 @@
             </div>
           </div>
         </div>
+        {#if sizeEstimate}<p class="estimate">{sizeEstimate} per {slices > 1 ? "carousel" : "photo"}</p>{/if}
         <p class="hint">
           {exportPrefs.format === "png"
             ? "PNG is lossless: the best quality, but large files."
@@ -1836,8 +2384,17 @@
 
         <div class="actions">
           <!-- svelte-ignore a11y_autofocus -->
-          <button class="btn accent big" onclick={() => downloadImage("framed")} disabled={!processedImage || isDownloading} autofocus>
-            {isDownloading ? "Exporting…" : "Save framed photo"}
+          {#if canShareFiles}
+            {#if pendingShare}
+              <button class="btn accent big" onclick={() => shareFiles(pendingShare)}>{@render icon("share")}Share now</button>
+            {:else}
+              <button class="btn accent big" onclick={shareImage} disabled={!processedImage || isDownloading} autofocus>
+                {@render icon("share")}{isDownloading ? "Preparing…" : "Share to Instagram & more"}
+              </button>
+            {/if}
+          {/if}
+          <button class={canShareFiles ? "btn ghost" : "btn accent big"} onclick={() => downloadImage("framed")} disabled={!processedImage || isDownloading} autofocus={!canShareFiles}>
+            {isDownloading && !canShareFiles ? "Exporting…" : slices > 1 ? `Save ${slices} carousel slides` : "Save framed photo"}
           </button>
           <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>Save photo only, without frame</button>
           {#if filesList.length > 1}
@@ -1857,8 +2414,12 @@
   {#if showSavePresetModal}
     <div class="overlay" role="presentation" onclick={(e) => e.target === e.currentTarget && (showSavePresetModal = false)}>
       <div class="sheet-in glass card" role="dialog" aria-modal="true" aria-labelledby="save-title">
-        <h2 id="save-title">Save as template</h2>
-        <p class="hint">Keeps your ratio, border, colors, caption style, logo placement and edits for one-tap reuse.</p>
+        <h2 id="save-title">{saveKind === "look" ? "Save as my look" : "Save as template"}</h2>
+        <p class="hint">
+          {saveKind === "look"
+            ? "Keeps every edit (light, color, curve, mixer, detail, film) so you can apply it to any photo in one tap."
+            : "Keeps your ratio, border, colors, caption style, logo placement and edits for one-tap reuse."}
+        </p>
         <!-- svelte-ignore a11y_autofocus -->
         <input
           class="text"
@@ -1868,13 +2429,13 @@
           bind:value={newPresetName}
           autofocus
           onkeydown={(e) => {
-            if (e.key === "Enter") saveCurrentPreset(newPresetName);
+            if (e.key === "Enter") saveNamed();
             if (e.key === "Escape") showSavePresetModal = false;
           }}
         />
         <div class="actions row">
           <button class="btn ghost" onclick={() => (showSavePresetModal = false)}>Cancel</button>
-          <button class="btn accent" onclick={() => saveCurrentPreset(newPresetName)} disabled={!newPresetName.trim()}>Save template</button>
+          <button class="btn accent" onclick={saveNamed} disabled={!newPresetName.trim()}>{saveKind === "look" ? "Save look" : "Save template"}</button>
         </div>
       </div>
     </div>
@@ -2411,6 +2972,10 @@
     border: 1px solid var(--glass-line);
     background: rgb(255 255 255 / 0.05);
   }
+  .seg.wrap button[aria-pressed="true"] {
+    background: rgb(255 255 255 / 0.92);
+    color: #111;
+  }
   .modes {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2931,6 +3496,150 @@
     background: var(--glass-strong);
   }
 
+  /* ── Bar tools: undo / redo / compare ──────────────────────────────────── */
+  .bar-tools {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+  }
+  .meta + .bar-tools {
+    margin-left: 0;
+  }
+  .bar-tools + .bar-export {
+    margin-left: 4px;
+  }
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--text);
+    transition: background 150ms;
+  }
+  .icon-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+  .icon-btn:hover:not(:disabled),
+  .icon-btn.on {
+    background: rgb(255 255 255 / 0.12);
+  }
+  .icon-btn.on {
+    color: var(--accent);
+  }
+
+  /* ── Overlays on the photo ─────────────────────────────────────────────── */
+  .badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.6);
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  .slice-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px dashed rgb(255 255 255 / 0.85);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.25);
+    pointer-events: none;
+  }
+  .crop-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+  .crop-box {
+    position: absolute;
+    box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.55);
+    outline: 1px solid rgb(255 255 255 / 0.9);
+    cursor: move;
+    touch-action: none;
+  }
+  .crop-box:focus-visible {
+    outline: 2px solid var(--accent);
+  }
+  .third {
+    position: absolute;
+    background: rgb(255 255 255 / 0.35);
+    pointer-events: none;
+  }
+  .third.v1, .third.v2 { top: 0; bottom: 0; width: 1px; }
+  .third.h1, .third.h2 { left: 0; right: 0; height: 1px; }
+  .third.v1 { left: 33.333%; }
+  .third.v2 { left: 66.666%; }
+  .third.h1 { top: 33.333%; }
+  .third.h2 { top: 66.666%; }
+  .handle {
+    position: absolute;
+    width: 26px;
+    height: 26px;
+    margin: -13px;
+    touch-action: none;
+  }
+  .handle::after {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.5);
+  }
+  .handle.nw { left: 0; top: 0; cursor: nwse-resize; }
+  .handle.ne { right: 0; top: 0; cursor: nesw-resize; }
+  .handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+  .handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+
+  /* ── Panel extras ──────────────────────────────────────────────────────── */
+  .look-cell {
+    position: relative;
+  }
+  .row-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .row-btns > :global(*) {
+    flex: 1 1 auto;
+  }
+  .bands {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .band {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--c);
+    outline: 2px solid transparent;
+    outline-offset: 3px;
+  }
+  .band[aria-pressed="true"] {
+    outline-color: #fff;
+  }
+  .band.changed::after {
+    /* dot marks bands you've adjusted */
+    content: "";
+    position: absolute;
+    bottom: -9px;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: #fff;
+  }
+  .estimate {
+    font-size: 0.92rem;
+    font-weight: 600;
+  }
+
   /* ── Phone ─────────────────────────────────────────────────────────────── */
   @media (max-width: 899px) {
     .app {
@@ -2946,8 +3655,22 @@
       min-height: 48px;
       padding: 6px 6px 6px 16px;
     }
-    .meta-dim {
+    /* Room for undo / redo / compare / export on a phone-width bar. */
+    .meta {
       display: none;
+    }
+    .wordmark {
+      font-size: 0.95rem;
+    }
+    .bar {
+      gap: 6px;
+    }
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+    }
+    .bar-export {
+      padding: 9px 14px;
     }
     .strip {
       padding: 6px 10px;
