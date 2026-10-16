@@ -65,6 +65,12 @@
     ],
   };
   let activeTool = $state({ editor: "looks", framing: "ratio" });
+  // Phones: the tool panel folds down to its tab row so the photo can use the screen (CSS hides it only ≤600px).
+  let sheetOpen = $state(true);
+  function pickTool(id) {
+    sheetOpen = activeTool[activeTab] === id ? !sheetOpen : true;
+    activeTool[activeTab] = id;
+  }
   // One line under the tabs, so every tool explains itself.
   const TOOL_HINTS = {
     looks: "One-tap film looks. Tap again to fine-tune with the other tools.",
@@ -2190,21 +2196,24 @@
       {#if filesList.length > 1}<p class="strip-note">{selectedCount} of {filesList.length} in batch</p>{/if}
     </nav>
 
-    <aside class="panel glass" aria-label="Controls">
+    <aside class="panel glass" class:collapsed={!sheetOpen} aria-label="Controls">
+      <button class="grabber" onclick={() => (sheetOpen = !sheetOpen)} aria-expanded={sheetOpen} aria-controls="tool-body" aria-label={sheetOpen ? "Hide tools to see the whole photo" : "Show tools"}>
+        <span aria-hidden="true"></span>
+      </button>
       <div class="seg modes" role="group" aria-label="Mode">
-        <button aria-pressed={activeTab === "editor"} onclick={() => (activeTab = "editor")}>Edit</button>
-        <button aria-pressed={activeTab === "framing"} onclick={() => (activeTab = "framing")}>Frame</button>
+        <button aria-pressed={activeTab === "editor"} onclick={() => ((activeTab = "editor"), (sheetOpen = true))}>Edit</button>
+        <button aria-pressed={activeTab === "framing"} onclick={() => ((activeTab = "framing"), (sheetOpen = true))}>Frame</button>
       </div>
 
       <div class="tabs" class:many={TOOLS[activeTab].length > 4} role="group" aria-label="Tools">
         {#each TOOLS[activeTab] as [id, name] (id)}
-          <button class="tab" title={TOOL_HINTS[id]} aria-pressed={activeTool[activeTab] === id} onclick={() => (activeTool[activeTab] = id)}>
+          <button class="tab" title={TOOL_HINTS[id]} aria-pressed={activeTool[activeTab] === id} onclick={() => pickTool(id)}>
             {@render icon(id)}<span>{name}</span>
           </button>
         {/each}
       </div>
 
-      <div class="body">
+      <div class="body" id="tool-body">
         <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
         {#if activeTab === "editor"}
           {@const tool = activeTool.editor}
@@ -3394,6 +3403,9 @@
        .cube file input), which pushed the tabs out of view with no way to scroll back. */
     overflow: clip;
   }
+  .grabber {
+    display: none;
+  }
   .seg {
     display: inline-flex;
     padding: 3px;
@@ -4355,13 +4367,32 @@
     }
     /* The panel becomes a bottom sheet: fixed height, only its content scrolls. */
     .app > .panel {
-      height: 44dvh;
+      height: 36dvh;
       max-height: none;
       border-top-width: 1px;
       border-radius: 18px 18px 0 0;
     }
     .modes {
-      margin: 8px 12px 0;
+      margin: 0 12px;
+    }
+    /* Sheet handle: tap to fold the panel down to its tab row (tapping the active tool does the same). */
+    .grabber {
+      display: grid;
+      place-items: center;
+      height: 18px;
+      flex: none;
+    }
+    .grabber span {
+      width: 40px;
+      height: 4px;
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--text) 30%, transparent);
+    }
+    .app > .panel.collapsed {
+      height: auto;
+    }
+    .panel.collapsed .body {
+      display: none;
     }
     .modes button {
       padding: 6px 12px;
