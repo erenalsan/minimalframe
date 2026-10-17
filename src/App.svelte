@@ -112,12 +112,23 @@
   // Closing lands when its animation ends; any tap in between cancels the close, so taps always win and in order.
   let trayClosing = $state(false);
   let trayAnim = null;
+  // While anything moves (tray, frame morph, crop zoom, pinch), the photo and the tray get their own GPU
+  // layers and the costly effects (big soft shadow, grain, bloom) step aside, so they aren't repainted
+  // on every frame. About 3x less painting; it's what keeps big tablet screens smooth.
+  let moving = $state(false);
+  let movingTimer;
+  function moveFor(ms) {
+    moving = true;
+    clearTimeout(movingTimer);
+    movingTimer = setTimeout(() => (moving = false), ms);
+  }
   const still = () => !compact || matchMedia("(prefers-reduced-motion: reduce)").matches;
   const trayHeight = () => panelEl?.getBoundingClientRect().height ?? 0; // mid-animation too
   function sizeTray(from, to, done) {
     trayAnim?.cancel();
     trayAnim = null;
     if (Math.abs(from - to) < 1) return done?.();
+    moveFor(380);
     trayAnim = panelEl.animate([{ height: `${from}px` }, { height: `${to}px` }], {
       duration: 320,
       easing: "cubic-bezier(0.4, 0, 0.2, 1)", // eases in and out, so the photo never jumps on the first frame
@@ -178,6 +189,7 @@
         return;
       }
       e.preventDefault();
+      moveFor(300);
       trayPull = Math.max(0, dy - 10);
     };
     const up = () => {
@@ -351,12 +363,16 @@
       const [a, b] = [...pointers.values()];
       const m = rel(pinch.box, (a.x + b.x) / 2, (a.y + b.y) / 2);
       const z = zoomAt(pinch.z, (pinch.z.s * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, pinch.mid);
+      moveFor(250);
       return setZoom({ s: z.s, x: z.x + m.x - pinch.mid.x, y: z.y + m.y - pinch.mid.y }, pinch.box); // zoom and follow the fingers
     }
     if (swipe && Math.hypot(e.clientX - swipe.x, e.clientY - swipe.y) > 12) {
       clearTimeout(holdTimer);
       showOriginal = false;
-      if (pan) setZoom({ s: pan.z.s, x: pan.z.x + e.clientX - pan.x, y: pan.z.y + e.clientY - pan.y }, pan.box);
+      if (pan) {
+        moveFor(250);
+        setZoom({ s: pan.z.s, x: pan.z.x + e.clientX - pan.x, y: pan.z.y + e.clientY - pan.y }, pan.box);
+      }
     }
   }
   function releasePhoto(e) {
@@ -480,6 +496,7 @@
     const qx = (c.x + c.w / 2 - 0.5) * b.w;
     const qy = (c.y + c.h / 2 - 0.5) * b.h;
     settling = true;
+    moveFor(500);
     zoom = { s: sc, x: area.left + area.width / 2 - b.cx - sc * qx, y: area.top + area.height / 2 - b.cy - sc * qy };
     setTimeout(() => (settling = false), 460);
   }
@@ -818,6 +835,7 @@
     ghostEl.getContext("2d").drawImage(canvasEl, 0, 0);
     ghostEl.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: "ease-out" });
     morphing = true;
+    moveFor(420);
     clearTimeout(morphTimer);
     morphTimer = setTimeout(() => (morphing = false), 400);
   }
@@ -918,6 +936,7 @@
 
   onMount(() => {
     if (new URLSearchParams(location.search).has("shared")) loadSharedFiles();
+    if (new URLSearchParams(location.search).has("fps")) import("./lib/fpsMeter.js").then((m) => m.startFpsMeter()); // testing on real devices
     loadPresets();
     // Canvas text can't swap fonts by itself; redraw once the bundled caption font is ready.
     document.fonts?.ready.then(() => scheduleRender());
@@ -1978,6 +1997,7 @@
 <main
   class="app"
   class:empty={!started}
+  class:moving
 >
   <header class="bar">
     <div class="bar-side">
@@ -2636,6 +2656,21 @@
   }
   .fx-bloom {
     mix-blend-mode: screen;
+  }
+  .fx-bloom,
+  .fx-grain {
+    transition: opacity 150ms;
+  }
+  /* see `moving` in the script: nothing costly is repainted while things move */
+  .app.moving .print {
+    will-change: transform;
+    box-shadow: 0 12px 30px -12px rgb(0 0 0 / 0.6);
+  }
+  .app.moving .panel > :global(*) {
+    will-change: transform;
+  }
+  .app.moving :is(.fx-bloom, .fx-grain) {
+    opacity: 0 !important;
   }
   .fx-grain {
     mix-blend-mode: overlay;
