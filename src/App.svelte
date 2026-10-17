@@ -822,9 +822,9 @@
       frame.exifDisplay = { ...frame.exifDisplay, ...p.exifDisplay };
   }
 
-  // Frame changes (template, ratio, slides, caption style, Edit ⇄ Frame, undo) morph: the photo's box eases to
-  // its new shape while the old picture fades out over the new one. Both are fitted inside the box
-  // (object-fit: contain), so neither stretches; the frame colour fills the gap meanwhile.
+  // Frame changes (template, ratio, slides, caption style, Edit ⇄ Frame, undo) morph like a window: the new
+  // picture appears at its final size and stays still, the box's edges ease to the new shape around it, and
+  // the old picture (at its old size) fades out. Nothing scales, so the photo itself barely moves.
   let ghostEl = $state.raw(null);
   let morphing = $state(false);
   let morphTimer;
@@ -833,11 +833,12 @@
     ghostEl.width = canvasEl.width;
     ghostEl.height = canvasEl.height;
     ghostEl.getContext("2d").drawImage(canvasEl, 0, 0);
-    ghostEl.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: "ease-out" });
+    ghostEl.style.setProperty("--pa", canvasEl.width / canvasEl.height);
+    ghostEl.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: "ease-out" });
     morphing = true;
     moveFor(420);
     clearTimeout(morphTimer);
-    morphTimer = setTimeout(() => (morphing = false), 400);
+    morphTimer = setTimeout(() => (morphing = false), 340);
   }
   $effect.pre(() => {
     // runs before the new frame is drawn, so the ghost still holds the old one
@@ -2053,6 +2054,7 @@
       >
         <canvas
           bind:this={canvasEl}
+          style:--pa={canvasAspect}
           aria-label="Preview of {activeItem?.name ?? 'your photo'}"
         ></canvas>
         <canvas class="ghost" bind:this={ghostEl} aria-hidden="true"></canvas>
@@ -2626,15 +2628,18 @@
         0 10px 40px -15px rgb(0 0 0 / 0.35);
     }
   }
+  /* Each picture keeps the size it has at its own aspect ratio (--pa), centred: equal to the box once it
+     settles; mid-morph the box's edges move around it instead of the picture being rescaled. */
   canvas {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    translate: -50% -50%; /* centred even when wider than the box (auto margins only centre what fits) */
     display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: contain; /* only matters mid-morph, when the box and the picture differ in shape */
+    width: min(100cqw, 100cqh * var(--pa));
+    height: auto;
   }
   .ghost {
-    position: absolute;
-    inset: 0;
     opacity: 0;
     pointer-events: none;
   }
@@ -2642,7 +2647,7 @@
     background: var(--print-bg);
   }
   .print.morphing {
-    transition: --ar 360ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: --ar 300ms cubic-bezier(0.4, 0, 0.2, 1);
   }
   .print.settling {
     transition: transform 450ms cubic-bezier(0.4, 0, 0.2, 1);
