@@ -10,7 +10,7 @@
 
   import * as exifr from "exifr";
   import JSZip from "jszip";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
 
   // Pure logic and engines
   import {
@@ -46,7 +46,7 @@
     dragRect,
     turnedSize,
   } from "./lib/geometry.js";
-  import { zoomAt, clampPan, NO_ZOOM } from "./lib/zoom.js";
+  import { zoomAt, clampPan, NO_ZOOM, MAX_ZOOM } from "./lib/zoom.js";
   import {
     getContrastingColor,
     applyExifOrientation,
@@ -461,6 +461,38 @@
   const resetCrop = () => activeItem && (activeItem.crop = null);
 
   let cropDrag = null;
+  // Lightroom-style: half a second after the crop settles (a corner let go, a ratio or rotation picked),
+  // the view eases in until the crop fills the photo area. Dragging keeps working in that zoomed view.
+  let settling = $state(false);
+  let settleTimer;
+  function fitCropSoon() {
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(fitCrop, 500);
+  }
+  function fitCrop() {
+    if (!cropping || cropDrag || !printEl || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const area = printEl.parentElement.getBoundingClientRect();
+    const b = photoBox();
+    const c = crop;
+    const sc = Math.min(MAX_ZOOM, area.width / (c.w * b.w), area.height / (c.h * b.h));
+    if (sc <= 1.02) return void (zoom = NO_ZOOM);
+    // the crop's centre (relative to the photo's centre) lands on the area's centre
+    const qx = (c.x + c.w / 2 - 0.5) * b.w;
+    const qy = (c.y + c.h / 2 - 0.5) * b.h;
+    settling = true;
+    zoom = { s: sc, x: area.left + area.width / 2 - b.cx - sc * qx, y: area.top + area.height / 2 - b.cy - sc * qy };
+    setTimeout(() => (settling = false), 460);
+  }
+  $effect(() => {
+    if (!cropping) return;
+    crop.x, crop.y, crop.w, crop.h, turned;
+    fitCropSoon();
+  });
+  function endCropDrag() {
+    if (!cropDrag) return;
+    cropDrag = null;
+    fitCropSoon();
+  }
   function startCropDrag(e, handle) {
     e.preventDefault();
     e.stopPropagation();
@@ -761,6 +793,7 @@
   }
 
   function applyFrame(p) {
+    morph();
     for (const k of Object.keys(frame))
       if (k !== "exifDisplay" && p[k] !== undefined) frame[k] = p[k];
     frame.captionSpace = p.captionSpace ?? 12; // older templates have none
@@ -771,6 +804,28 @@
     if (p.exifDisplay)
       frame.exifDisplay = { ...frame.exifDisplay, ...p.exifDisplay };
   }
+
+  // Frame changes (template, ratio, slides, caption style, Edit ⇄ Frame, undo) morph: the photo's box eases to
+  // its new shape while the old picture fades out over the new one. Both are fitted inside the box
+  // (object-fit: contain), so neither stretches; the frame colour fills the gap meanwhile.
+  let ghostEl = $state.raw(null);
+  let morphing = $state(false);
+  let morphTimer;
+  function morph() {
+    if (!processedImage || !canvasEl?.width || !ghostEl || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    ghostEl.width = canvasEl.width;
+    ghostEl.height = canvasEl.height;
+    ghostEl.getContext("2d").drawImage(canvasEl, 0, 0);
+    ghostEl.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: "ease-out" });
+    morphing = true;
+    clearTimeout(morphTimer);
+    morphTimer = setTimeout(() => (morphing = false), 400);
+  }
+  $effect.pre(() => {
+    // runs before the new frame is drawn, so the ghost still holds the old one
+    frame.selectedRatioId, frame.slides, frame.slideShape, frame.captionStyle, activeTab;
+    untrack(morph);
+  });
 
   // ─── Undo / redo ───────────────────────────────────────────────────────────
   // Snapshots of everything undoable (frame settings + the active photo's edits, crop and caption text),
@@ -1330,8 +1385,11 @@
           geo,
           (previewGeoCanvas ??= document.createElement("canvas")),
         );
-    histo = histogram(processedImage);
+    // The histogram reads pixels back from the GPU, which stalls a frame: only once a slider pauses.
+    clearTimeout(histoTimer);
+    histoTimer = setTimeout(() => processedImage && (histo = histogram(processedImage)), 150);
   }
+  let histoTimer;
 
   // ─── Caption text ──────────────────────────────────────────────────────────
   function buildExifLines(override, display) {
@@ -1908,7 +1966,7 @@
   onkeydown={onKeydown}
   onkeyup={onKeyup}
   onpointermove={moveCropDrag}
-  onpointerup={() => (cropDrag = null)}
+  onpointerup={endCropDrag}
   onblur={() => (showOriginal = false)}
   ondragstart={(e) => e.preventDefault()}
   ondragenter={onDragEnter}
@@ -1958,7 +2016,11 @@
       <div
         class="print"
         class:positioning
+        class:morphing
+        class:settling
         style:--ar={canvasAspect}
+        style:--zs={zoom.s}
+        style:--print-bg={activeTab === "framing" ? frame.backgroundColor : "transparent"}
         bind:this={printEl}
         style:transform={zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
         title={cropping ? undefined : positioning ? "Drag to choose which part of the photo fills the slides" : "Press and hold to see the original. Pinch or double-tap to zoom."}
@@ -1973,6 +2035,7 @@
           bind:this={canvasEl}
           aria-label="Preview of {activeItem?.name ?? 'your photo'}"
         ></canvas>
+        <canvas class="ghost" bind:this={ghostEl} aria-hidden="true"></canvas>
         {#if dev.softBloom > 0}
           <div
             class="fx-bloom"
@@ -2058,7 +2121,7 @@
       </button>
     {/if}
 
-    {#if zoom.s > 1}
+    {#if zoom.s > 1 && !cropping}
       <button class="zoom-pill glass" onclick={() => (zoom = NO_ZOOM)} aria-label="Zoomed {zoom.s.toFixed(1)} times. Fit the photo">{zoom.s.toFixed(1)}× · Fit</button>
     {/if}
 
@@ -2547,6 +2610,22 @@
     display: block;
     width: 100%;
     height: 100%;
+    object-fit: contain; /* only matters mid-morph, when the box and the picture differ in shape */
+  }
+  .ghost {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .print {
+    background: var(--print-bg);
+  }
+  .print.morphing {
+    transition: --ar 360ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .print.settling {
+    transition: transform 450ms cubic-bezier(0.4, 0, 0.2, 1);
   }
   .fx-bloom,
   .fx-grain,
@@ -2928,10 +3007,13 @@
     border: 0 solid #fff;
     filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.7));
   }
-  .handle.nw { left: 0; top: 0; cursor: nwse-resize; }
-  .handle.ne { right: 0; top: 0; cursor: nesw-resize; }
-  .handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
-  .handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+  .handle {
+    scale: calc(1 / var(--zs, 1)); /* same size on screen while the crop view is zoomed */
+  }
+  .handle.nw { left: 0; top: 0; cursor: nwse-resize; transform-origin: 0 0; }
+  .handle.ne { right: 0; top: 0; cursor: nesw-resize; transform-origin: 100% 0; }
+  .handle.sw { left: 0; bottom: 0; cursor: nesw-resize; transform-origin: 0 100%; }
+  .handle.se { right: 0; bottom: 0; cursor: nwse-resize; transform-origin: 100% 100%; }
   .handle.nw::after { left: 0; top: 0; border-width: 4px 0 0 4px; }
   .handle.ne::after { right: 0; top: 0; border-width: 4px 4px 0 0; }
   .handle.sw::after { left: 0; bottom: 0; border-width: 0 0 4px 4px; }

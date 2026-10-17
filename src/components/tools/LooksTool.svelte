@@ -43,15 +43,6 @@
     for (const f of filesList) if (f.dev.lut === id) f.dev.lut = "";
     await deleteLut(id);
   }
-  // Per-LUT previews of the active photo, rendered by the real engine.
-  let lutThumbs = $state({});
-  $effect(() => {
-    const small = item?.small;
-    const list = lutLib.list;
-    if (!small || !canDevelop) return;
-    const out = document.createElement("canvas");
-    lutThumbs = Object.fromEntries(list.map((l) => [l.id, develop(small, { ...freshDev(), lut: l.id }, out).toDataURL("image/jpeg", 0.8)]));
-  });
 
   // ─── Fujifilm recipes ──────────────────────────────────────────────────────
   function applyRecipe() {
@@ -72,13 +63,11 @@
   // ─── Auto ──────────────────────────────────────────────────────────────────
   // Brightness, contrast, white balance and colour worked out from this photo (see autoTarget), on top of no
   // other edits, like any look. Computed on the 160px proxy, so it's instant.
-  const autoLook = $derived.by(() => {
-    if (!item?.small || !canDevelop) return null;
-    const work = document.createElement("canvas");
-    const measure = (p) => imageStats(pixels(develop(item.small, p, work)));
+  function computeAuto(small, work) {
+    const measure = (p) => imageStats(pixels(develop(small, p, work)));
     const params = matchLook(freshDev(), autoTarget(measure(freshDev())), measure);
-    return { id: "auto", name: "Auto", params, thumb: develop(item.small, params, work).toDataURL("image/jpeg", 0.8) };
-  });
+    return { id: "auto", name: "Auto", params, thumb: develop(small, params, work).toDataURL("image/jpeg", 0.8) };
+  }
   function matchItemTo(item, ref) {
     const work = document.createElement("canvas");
     const target = imageStats(pixels(develop(ref.small, ref.dev, work)));
@@ -96,30 +85,78 @@
       (k) => JSON.stringify(l.params[k] ?? DEV_DEFAULTS[k]) === JSON.stringify(dev[k] ?? DEV_DEFAULTS[k]),
     );
 
-  // Look thumbnails rendered by the real develop engine from the active photo, so they match the result.
+  // Thumbnails (looks, LUTs, Auto) come from the real develop engine on the active photo, so they match the
+  // result. They're kept per photo, and rendered the first time only after the tray has finished opening,
+  // so opening stays smooth.
   let lookThumbs = $state({});
+  let lutThumbs = $state({});
+  let autoLook = $state(null);
   $effect(() => {
     const small = item?.small;
     const looks = allLooks;
+    const luts = lutLib.list;
     if (!small || !canDevelop) {
-      lookThumbs = {};
+      lookThumbs = lutThumbs = {};
+      autoLook = null;
       return;
     }
-    const out = document.createElement("canvas");
-    lookThumbs = Object.fromEntries(looks.map((l) => [l.id, develop(small, l.params, out).toDataURL("image/jpeg", 0.8)]));
+    if (!thumbCache.has(small)) thumbCache.set(small, new Map());
+    const cache = thumbCache.get(small);
+    const lutParams = (l) => ({ ...freshDev(), lut: l.id });
+    // One thumbnail per task, so a first render never holds up a frame for long.
+    let stop = false;
+    const run = async (yieldBetween) => {
+      const out = document.createElement("canvas");
+      const thumb = async (p) => {
+        const k = JSON.stringify(p);
+        if (!cache.has(k)) {
+          if (yieldBetween) await new Promise((r) => setTimeout(r));
+          if (stop) return null;
+          cache.set(k, develop(small, p, out).toDataURL("image/jpeg", 0.8));
+        }
+        return cache.get(k);
+      };
+      if (!cache.has("auto")) cache.set("auto", computeAuto(small, out));
+      autoLook = cache.get("auto");
+      // each thumbnail shows as soon as it's ready (the others keep their CSS-filter stand-in meanwhile)
+      for (const l of looks) {
+        const src = await thumb(l.params);
+        if (stop) return;
+        lookThumbs = { ...lookThumbs, [l.id]: src };
+      }
+      for (const l of luts) {
+        const src = await thumb(lutParams(l));
+        if (stop) return;
+        lutThumbs = { ...lutThumbs, [l.id]: src };
+      }
+    };
+    const cached = cache.has("auto") && [...looks.map((l) => l.params), ...luts.map(lutParams)].every((p) => cache.has(JSON.stringify(p)));
+    if (cached) {
+      run(false);
+      return () => (stop = true);
+    }
+    autoLook = null;
+    lookThumbs = lutThumbs = {}; // another photo's thumbnails must not linger
+    const t = setTimeout(() => run(true), 360);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
   });
 </script>
 
 <script module>
   // Survives switching tools, like the rest of the panel.
   const ui = $state({ recipeText: "", recipeNote: "", recipeName: "" });
+  // Rendered thumbnails per photo (its 160px proxy) → { params JSON or "auto" → image }; gone with the photo.
+  const thumbCache = new WeakMap();
 </script>
 
 <div class="looks">
-  {#if autoLook}
+  {#if canDevelop && item?.small}
     <div class="look-cell">
-      <button class="look auto" aria-pressed={isLookActive(autoLook)} onclick={() => applyLook(autoLook)} title="Fixes brightness, contrast, white balance and colour for this photo">
-        <img src={autoLook.thumb} alt="" />
+      <button class="look auto" aria-pressed={autoLook ? isLookActive(autoLook) : false} disabled={!autoLook} onclick={() => applyLook(autoLook)} title="Fixes brightness, contrast, white balance and colour for this photo">
+        <img src={autoLook?.thumb ?? item.thumbUrl} alt="" />
         <span>Auto</span>
       </button>
     </div>

@@ -39,6 +39,13 @@
   }
 }
 
+/* The photo's aspect ratio is registered as a number so it can be animated (App.svelte, frame morph). */
+@property --ar {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0.8;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html { font-size: 15px; }
