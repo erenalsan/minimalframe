@@ -14,13 +14,15 @@
   --text: #18181a;
   --muted: rgb(24 24 26 / 0.6);
   --accent: #f59e0b; /* fills: Export, selection marks */
+  --on: #ffffff; /* the selected option in a switch: a raised chip on a grey track */
+  --on-shadow: 0 1px 3px rgb(0 0 0 / 0.16), 0 0 0 1px rgb(0 0 0 / 0.04);
   --accent-strong: #fbbf24;
   --accent-ink: #b45309; /* amber that reads as text on a light background */
   --radius: 14px;
   --glass: var(--surface);
   --glass-strong: var(--surface);
   --glass-line: var(--line);
-  color-scheme: light dark;
+  color-scheme: light dark only; /* "only": browsers must not force-darken our light theme */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -32,6 +34,8 @@
     --text: #f1f1ef;
     --muted: rgb(241 241 239 / 0.56);
     --accent-ink: #fbbf24;
+    --on: #3a3a3e;
+    --on-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
   }
 }
 

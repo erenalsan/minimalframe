@@ -1561,6 +1561,23 @@
     setTimeout(() => link.remove(), 2000);
   }
 
+  // Phones and tablets save every photo/slide as its own image (it lands in the gallery straight away);
+  // desktop gets one ZIP, which is tidier in a downloads folder.
+  const savesSeparately = matchMedia("(pointer: coarse)").matches;
+  async function saveFiles(files, zipName) {
+    if (files.length === 1) return triggerDownload(files[0].blob, files[0].name);
+    if (!savesSeparately) return triggerDownload(await zipFiles(files), zipName);
+    for (const f of files) {
+      const url = URL.createObjectURL(f.blob);
+      const link = Object.assign(document.createElement("a"), { href: url, download: f.name });
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      await new Promise((r) => setTimeout(r, 350)); // browsers drop downloads started in the same instant
+    }
+  }
+
   function flashStatus(text) {
     downloadStatus = text;
     setTimeout(() => downloadStatus === text && (downloadStatus = ""), 5000);
@@ -1573,14 +1590,11 @@
     try {
       await new Promise((r) => setTimeout(r, 20)); // let the status paint
       const files = await renderFiles(activeItem, mode);
-      if (files.length === 1) {
-        triggerDownload(files[0].blob, files[0].name);
-        flashStatus(`Saved ${files[0].name}`);
-      } else {
-        const name = `${cleanName(activeItem.name, "photo")}_carousel.zip`;
-        triggerDownload(await zipFiles(files), name);
-        flashStatus(`Saved ${files.length} slides to ${name}`);
-      }
+      const name = `${cleanName(activeItem.name, "photo")}_carousel.zip`;
+      await saveFiles(files, name);
+      flashStatus(
+        files.length === 1 ? `Saved ${files[0].name}` : savesSeparately ? `Saved ${files.length} slides` : `Saved ${files.length} slides to ${name}`,
+      );
     } catch (err) {
       console.error("[MinimalFrame] Download failed:", err);
       loadError = `Export failed: ${err.message}`;
@@ -1633,7 +1647,7 @@
     }
   }
 
-  // ─── Batch export (.zip) ───────────────────────────────────────────────────
+  // ─── Batch export (separate images on phones/tablets, one ZIP on desktop) ───────────────────────────────────────────────────
   async function exportBatch(mode = "framed") {
     const batch = filesList.filter((item) => item.selected);
     if (batch.length === 0) return;
@@ -1652,10 +1666,10 @@
         await new Promise((r) => setTimeout(r, 20)); // let the progress bar paint
         files.push(...(await renderFiles(batch[i], mode, i)));
       }
-      batchProgress.filename = "Packing the ZIP…";
+      batchProgress.filename = savesSeparately ? "Saving…" : "Packing the ZIP…";
       const name = `MinimalFrame_${new Date().toISOString().slice(0, 10)}_${total}photos.zip`;
-      triggerDownload(await zipFiles(files), name);
-      flashStatus(`Saved ${total} photos to ${name}`);
+      await saveFiles(files, name);
+      flashStatus(savesSeparately ? `Saved ${files.length} images` : `Saved ${total} photos to ${name}`);
     } catch (err) {
       console.error("[MinimalFrame] Batch export error:", err);
       loadError = `Batch export failed: ${err.message}`;
@@ -2032,6 +2046,7 @@
     {sizeEstimate}
     {sizeLabel}
     {slices}
+    {savesSeparately}
   />
 
 
@@ -2190,6 +2205,9 @@
     width: 24px;
     height: 24px;
     display: block;
+  }
+  .bar .modes {
+    justify-self: center;
   }
   .modes button {
     min-width: 76px;

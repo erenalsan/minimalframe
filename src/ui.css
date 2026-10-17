@@ -90,6 +90,7 @@ button:disabled {
 /* ── Segmented control ───────────────────────────────────────────────── */
 .seg {
   display: inline-flex;
+  width: fit-content; /* never stretched by a grid or column container: the pill hugs its buttons */
   padding: 3px;
   gap: 2px;
   border-radius: 999px;
@@ -108,10 +109,12 @@ button:disabled {
   color: var(--text);
 }
 .seg button[aria-pressed="true"] {
-  background: var(--text);
-  color: var(--surface);
+  background: var(--on);
+  color: var(--text);
+  box-shadow: var(--on-shadow);
 }
 .seg.wrap {
+  width: auto; /* chip lists do span the row */
   display: flex;
   flex-wrap: wrap;
   background: none;
@@ -124,8 +127,9 @@ button:disabled {
   background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 .seg.wrap button[aria-pressed="true"] {
-  background: var(--text);
-  color: var(--surface);
+  background: var(--on);
+  color: var(--text);
+  box-shadow: var(--on-shadow);
 }
 
 /* ── Text and layout ─────────────────────────────────────────────────── */

@@ -25,6 +25,7 @@
     sizeEstimate,
     sizeLabel,
     slices,
+    savesSeparately, // phones/tablets: separate images instead of a ZIP
   } = $props();
 </script>
 
@@ -111,7 +112,7 @@
         <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>Save photo only, without frame</button>
         {#if filesList.length > 1}
           <button class="btn ghost" onclick={() => exportBatch("framed")} disabled={selectedCount === 0 || isDownloading}>
-            Save {selectedCount} framed {selectedCount === 1 ? "photo" : "photos"} as ZIP
+            Save {selectedCount} framed {selectedCount === 1 ? "photo" : "photos"}{savesSeparately ? "" : " as ZIP"}
           </button>
         {/if}
       </div>

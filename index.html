@@ -7,8 +7,10 @@
     <title>MinimalFrame</title>
     <meta name="description"
           content="Frame your photos for Instagram with borders, ratios and camera details. Everything stays on your device." />
-    <meta name="theme-color" content="#232322" />
-    <meta name="color-scheme" content="dark" />
+    <!-- Both themes are designed; this also stops browsers' forced dark mode from repainting the light one. -->
+    <meta name="color-scheme" content="light dark only" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfbfa" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617" />
 
     <meta property="og:title"       content="MinimalFrame" />
     <meta property="og:description" content="Frame your photos for Instagram with borders, ratios and camera details." />

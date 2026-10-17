@@ -109,8 +109,9 @@
       background: var(--field);
     }
     .chip[aria-selected="true"] {
-      background: var(--text);
-      color: var(--surface);
+      background: var(--on);
+      color: var(--text);
+      box-shadow: var(--on-shadow);
     }
     /* A dot marks adjustments that have been changed. */
     .chip.changed::after {
