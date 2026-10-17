@@ -107,23 +107,45 @@
   let compact = $state(compactQuery.matches);
   compactQuery.addEventListener("change", (e) => (compact = e.matches));
   let trayOpen = $state(false); // compact only; the desktop panel is always open
-  // The tray opens straight away (its CSS slides it up); closing first plays the slide-down, so the
-  // close lands 200ms later. Any tap in between cancels the close, so taps always win and in order.
+  // The tray's height is what animates (opening, closing, switching tools, a finger pulling it down), so the
+  // photo area, which is the rest of the screen, grows and shrinks with it frame by frame.
+  // Closing lands when its animation ends; any tap in between cancels the close, so taps always win and in order.
   let trayClosing = $state(false);
-  let closeTimer;
-  function openTray() {
-    clearTimeout(closeTimer);
+  let trayAnim = null;
+  const still = () => !compact || matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const trayHeight = () => panelEl?.getBoundingClientRect().height ?? 0; // mid-animation too
+  function sizeTray(from, to, done) {
+    trayAnim?.cancel();
+    trayAnim = null;
+    if (Math.abs(from - to) < 1) return done?.();
+    trayAnim = panelEl.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+      duration: 320,
+      easing: "cubic-bezier(0.4, 0, 0.2, 1)", // eases in and out, so the photo never jumps on the first frame
+    });
+    trayAnim.onfinish = () => {
+      trayAnim = null;
+      done?.();
+    };
+  }
+  // Also call it after changing what an open tray shows: it eases to the new content's height.
+  async function openTray() {
+    const from = trayOpen ? trayHeight() : 0;
+    trayAnim?.cancel();
     trayClosing = false;
     trayOpen = true;
+    await tick();
+    if (!still() && panelEl) sizeTray(from, trayHeight());
   }
   function closeTray() {
     if (!trayOpen || trayClosing) return;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return void (trayOpen = false);
-    trayClosing = true;
-    closeTimer = setTimeout(() => {
+    const done = () => {
       trayOpen = false;
       trayClosing = false;
-    }, 200);
+      trayPull = 0;
+    };
+    if (still() || !panelEl) return done();
+    trayClosing = true;
+    sizeTray(trayHeight(), 0, done);
   }
   let trayView = $state("tool"); // phones: the tray shows the tool's settings, or "photos"
 
@@ -131,7 +153,7 @@
   // (the same swipe that would scroll further up). Touch events, so we can stop the page from scrolling.
   let panelEl = $state.raw(null);
   let trayPull = $state(0); // px the finger has pulled the tray down
-  let trayPulling = $state(false);
+  let pullFrom = $state(0); // the tray's height when the pull started
   $effect(() => {
     if (!compact || !panelEl) return;
     const el = panelEl;
@@ -147,7 +169,11 @@
       const dx = t.clientX - g.x;
       const dy = t.clientY - g.y;
       if (!g.on) {
-        if (dy > 10 && dy > 1.5 * Math.abs(dx)) g.on = trayPulling = true;
+        if (dy > 10 && dy > 1.5 * Math.abs(dx)) {
+          g.on = true;
+          trayAnim?.cancel();
+          pullFrom = trayHeight();
+        }
         else if (Math.abs(dx) > 10 || dy < -10) g = null; // a sideways row, a slider or a scroll down: not ours
         return;
       }
@@ -156,11 +182,11 @@
     };
     const up = () => {
       if (g?.on) {
-        trayPulling = false;
-        if (trayPull > 60) {
-          closeTray();
-          setTimeout(() => (trayPull = 0), 220); // slide on down from where the finger let go
-        } else trayPull = 0;
+        if (trayPull > Math.min(60, pullFrom / 3)) closeTray(); // carries on down from where the finger let go
+        else {
+          sizeTray(trayHeight(), pullFrom); // not far enough: springs back
+          trayPull = 0;
+        }
       }
       g = null;
     };
@@ -180,20 +206,26 @@
   // app: each one adds a history entry while open. Closing it any other way takes that entry back out.
   const backStack = [];
   let ignorePops = 0;
+  let popped = Promise.resolve(); // history.back() lands later: a new entry waits for it, or back would remove that one
+  let landPop = () => {};
   function closeOnBack(close) {
     const entry = { close };
     backStack.push(entry);
-    history.pushState({ mfOverlay: true }, "");
+    popped.then(() => backStack.includes(entry) && history.pushState({ mfOverlay: true }, ""));
     return () => {
       const i = backStack.indexOf(entry);
       if (i < 0) return; // back already closed it
       backStack.splice(i, 1);
       ignorePops++;
+      popped = new Promise((r) => (landPop = r));
       history.back();
     };
   }
   function onPopState() {
-    if (ignorePops > 0) return void ignorePops--;
+    if (ignorePops > 0) {
+      if (--ignorePops === 0) landPop();
+      return;
+    }
     const entry = backStack.pop();
     if (entry && entry.close() === false) {
       backStack.push(entry); // can't close right now (e.g. a batch export is running): stay
@@ -201,56 +233,25 @@
     }
   }
   $effect(() => {
-    if (compact && trayOpen && !trayClosing) return closeOnBack(() => glide(closeTray));
+    if (compact && trayOpen && !trayClosing) return closeOnBack(closeTray);
   });
   function pickTool(id) {
-    glide(() => {
-      if (trayOpen && !trayClosing && trayView === "tool" && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
-      activeTool[activeTab] = id;
-      trayView = "tool";
-      openTray();
-    });
+    if (trayOpen && !trayClosing && trayView === "tool" && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
+    activeTool[activeTab] = id;
+    trayView = "tool";
+    openTray();
   }
   function togglePhotos() {
-    glide(() => {
-      if (trayOpen && !trayClosing && trayView === "photos") return closeTray();
-      trayView = "photos";
-      openTray();
-    });
+    if (trayOpen && !trayClosing && trayView === "photos") return closeTray();
+    trayView = "photos";
+    openTray();
   }
   function setMode(tab) {
-    glide(() => {
-      activeTab = tab;
-      closeTray();
-    });
+    activeTab = tab;
+    closeTray();
   }
 
-  // The tray resizes the photo area instantly; FLIP turns that into motion: measure the photo (and the
-  // compare button under it), apply the change, measure again, then animate from the old box to the new
-  // one with the tray's own curve. Transforms only, so it stays smooth on phones.
   let printEl = $state.raw(null);
-  let holdEl = $state.raw(null);
-  async function glide(change) {
-    const els = [printEl, holdEl].filter(Boolean);
-    if (!compact || !els.length || matchMedia("(prefers-reduced-motion: reduce)").matches) return change();
-    const before = els.map((el) => el.getBoundingClientRect());
-    const wasOpen = trayOpen && !trayClosing;
-    change();
-    await tick();
-    const opening = trayOpen && !trayClosing;
-    els.forEach((el, i) => {
-      const a = before[i];
-      const b = el.getBoundingClientRect();
-      if (!b.width || (a.width === b.width && a.top === b.top)) return;
-      const dx = a.left + a.width / 2 - (b.left + b.width / 2);
-      const dy = a.top + a.height / 2 - (b.top + b.height / 2);
-      const scale = el === printEl ? a.width / b.width : 1;
-      el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${scale})` }, { transform: "none" }], {
-        duration: opening || wasOpen === opening ? 380 : 320,
-        easing: opening || wasOpen === opening ? "cubic-bezier(0.34, 1.3, 0.64, 1)" : "cubic-bezier(0.22, 1, 0.36, 1)",
-      });
-    });
-  }
   const toolOpen = (id) => activeTool[activeTab] === id && (!compact || (trayOpen && trayView === "tool"));
   let exportDialog = $state.raw(null);
   let fileInput = $state.raw(null);
@@ -2042,7 +2043,6 @@
     {#if processedImage}
       <button
         class="hold"
-        bind:this={holdEl}
         class:on={showOriginal}
         aria-label="Hold to see the original"
         title="Hold to see the original (\)"
@@ -2141,8 +2141,7 @@
     <aside
       class="panel"
       bind:this={panelEl}
-      style:transform={trayPull ? `translateY(${trayPull}px)` : undefined}
-      style:transition={trayPulling ? "none" : undefined}
+      style:height={trayPull ? `${Math.max(0, pullFrom - trayPull)}px` : undefined}
       class:open={trayOpen}
       class:closing={trayClosing} aria-label="{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]} settings">
       <div class="panel-head">
@@ -2150,7 +2149,7 @@
           <h2>{compact && trayView === "photos" ? "Photos" : TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
           <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
         </div>
-        <button class="btn accent done" onclick={() => glide(closeTray)}>Done</button>
+        <button class="btn accent done" onclick={closeTray}>Done</button>
       </div>
 
       <div class="body" id="tool-body">
@@ -2158,7 +2157,7 @@
           <PhotosTray
             bind:filesList
             activeIndex={activeImageIndex}
-            onpick={(i) => glide(() => (setActiveImage(i), closeTray()))}
+            onpick={(i) => (setActiveImage(i), closeTray())}
             onremove={removeImage}
             onadd={() => fileInput?.click()}
           />
@@ -3017,7 +3016,6 @@
     .panel {
       border-left: 0;
       border-top: 1px solid var(--line);
-      transition: transform 200ms ease-out; /* springs back when a pull-down is let go too early */
     }
     /* Grab bar: says the tray can be pulled down. */
     .panel::before {
@@ -3032,20 +3030,12 @@
     .panel:not(.open) {
       display: none;
     }
-    /* Slides up from behind the tool row with a little spring; back down when closing.
-       transform/opacity only, so it stays smooth on phones. */
-    .panel.open {
-      animation: tray-up 380ms cubic-bezier(0.34, 1.3, 0.64, 1);
+    /* While the tray's height animates, its content keeps its size and is clipped at the tool row. */
+    .panel > :global(*) {
+      flex-shrink: 0;
     }
-    /* While closing, the tray leaves the layout so the photo can grow at the same time as the tray slides
-       down. An absolute grid item is placed in its own (now zero-height) grid row, which sits right on
-       top of the tool row, so bottom: 0 keeps it exactly where it was. */
-    .panel.closing {
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      animation: tray-down 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+    .panel .body {
+      flex: none;
     }
     .rail {
       z-index: 2; /* the tray slides out from behind it */
@@ -3072,18 +3062,6 @@
     }
     .hold {
       bottom: 10px;
-    }
-  }
-  @keyframes tray-up {
-    from {
-      opacity: 0;
-      transform: translateY(48px);
-    }
-  }
-  @keyframes tray-down {
-    to {
-      opacity: 0;
-      transform: translateY(48px);
     }
   }
   /* Landscape phones: desktop's left-to-right layout (a bottom tray would squash the photo), slimmer. */
