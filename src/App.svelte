@@ -34,7 +34,8 @@
     histogram,
   } from "./lib/developEngine.js";
   import { applyAnalogEffects } from "./lib/effectsEngine.js";
-  import { cleanCamera, cleanLens, cameraBrand } from "./lib/exifCleaner.js";
+  import { cleanCamera, cleanLens } from "./lib/exifCleaner.js";
+  import { brandMark } from "./lib/brandLogos.js";
   import { computeFrameLayout, autoBorderAxis } from "./lib/frameLayout.js";
   import {
     CROP_DEFAULT,
@@ -123,13 +124,44 @@
     }, 200);
   }
   function pickTool(id) {
-    if (trayOpen && !trayClosing && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
-    activeTool[activeTab] = id;
-    openTray();
+    glide(() => {
+      if (trayOpen && !trayClosing && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
+      activeTool[activeTab] = id;
+      openTray();
+    });
   }
   function setMode(tab) {
-    activeTab = tab;
-    closeTray();
+    glide(() => {
+      activeTab = tab;
+      closeTray();
+    });
+  }
+
+  // The tray resizes the photo area instantly; FLIP turns that into motion: measure the photo (and the
+  // compare button under it), apply the change, measure again, then animate from the old box to the new
+  // one with the tray's own curve. Transforms only, so it stays smooth on phones.
+  let printEl = $state.raw(null);
+  let holdEl = $state.raw(null);
+  async function glide(change) {
+    const els = [printEl, holdEl].filter(Boolean);
+    if (!compact || !els.length || matchMedia("(prefers-reduced-motion: reduce)").matches) return change();
+    const before = els.map((el) => el.getBoundingClientRect());
+    const wasOpen = trayOpen && !trayClosing;
+    change();
+    await tick();
+    const opening = trayOpen && !trayClosing;
+    els.forEach((el, i) => {
+      const a = before[i];
+      const b = el.getBoundingClientRect();
+      if (!b.width || (a.width === b.width && a.top === b.top)) return;
+      const dx = a.left + a.width / 2 - (b.left + b.width / 2);
+      const dy = a.top + a.height / 2 - (b.top + b.height / 2);
+      const scale = el === printEl ? a.width / b.width : 1;
+      el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${scale})` }, { transform: "none" }], {
+        duration: opening || wasOpen === opening ? 380 : 320,
+        easing: opening || wasOpen === opening ? "cubic-bezier(0.34, 1.3, 0.64, 1)" : "cubic-bezier(0.22, 1, 0.36, 1)",
+      });
+    });
   }
   const toolOpen = (id) => activeTool[activeTab] === id && (!compact || trayOpen);
   let exportDialog = $state.raw(null);
@@ -167,6 +199,18 @@
   // Setter for function bindings (bind:dev={() => dev, keep}): tools mutate these objects but never replace them.
   const keep = () => {};
   let showOriginal = $state(false); // before/after: held while comparing
+  // Press and hold the photo itself (mouse or finger). A short delay keeps a quick click from flashing the
+  // original; while cropping, the photo's pointer belongs to the crop box.
+  let holdTimer;
+  function holdPhoto(e) {
+    if (cropping || e.button > 0) return;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => (showOriginal = true), 120);
+  }
+  function releasePhoto() {
+    clearTimeout(holdTimer);
+    showOriginal = false;
+  }
 
   // ─── Crop, straighten, rotate ──────────────────────────────────────────────
   const cropping = $derived(
@@ -512,7 +556,7 @@
     for (const k of Object.keys(frame))
       if (k !== "exifDisplay" && p[k] !== undefined) frame[k] = p[k];
     frame.captionSpace = p.captionSpace ?? 12; // older templates have none
-    frame.captionStyle = p.captionStyle === "bar" ? "bar" : "stack";
+    frame.captionStyle = ["bar", "spread"].includes(p.captionStyle) ? p.captionStyle : "stack";
     if (p.exifDisplay)
       frame.exifDisplay = { ...frame.exifDisplay, ...p.exifDisplay };
   }
@@ -1146,13 +1190,13 @@
     if (display.iso && override.iso?.trim()) settings.push(override.iso.trim());
 
     if (settings.length > 0) {
-      lines.push({ type: "settings", text: settings.join("  ·  ") });
+      lines.push({ type: "settings", text: settings.join("  ·  "), parts: settings });
     }
 
     const extra = [];
     if (display.note && override.note?.trim()) extra.push(override.note.trim());
     if (display.date && override.date?.trim()) extra.push(override.date.trim());
-    if (extra.length) lines.push({ type: "extra", text: extra.join("  ·  ") });
+    if (extra.length) lines.push({ type: "extra", text: extra.join("  ·  "), parts: extra });
 
     return lines;
   }
@@ -1185,7 +1229,7 @@
         posX: frame.textPosX,
         posY: frame.textPosY,
         style: frame.captionStyle,
-        brand: cameraBrand(exifOverride?.model).toUpperCase(),
+        brand: brandMark(exifOverride?.model),
         measure: (text, px, weight = 600) => {
           measureCtx.font = `${weight} ${px}px ${captionFamily()}`;
           return measureCtx.measureText(text).width;
@@ -1195,6 +1239,46 @@
   }
 
   /** Draws `photo` with border, caption and logo into `canvas` (resized to fit). */
+  // ─── Brand logos (brand bar) ───────────────────────────────────────────────
+  // Loaded once from public/brands/; the frame redraws when one arrives.
+  const logoImages = {};
+  function brandLogo(name) {
+    if (!logoImages[name]) {
+      const img = new Image();
+      img.onload = () => scheduleRender();
+      img.src = `${import.meta.env.BASE_URL}brands/${name}.svg`;
+      logoImages[name] = img;
+    }
+    const img = logoImages[name];
+    return img.complete && img.naturalWidth ? img : null;
+  }
+  // Black wordmarks (SONY, FUJIFILM…) are rasterised at the exact size and their black parts take the caption
+  // colour, so they read on a dark frame; coloured accents (Fujifilm's red) stay. Badges are drawn as they are.
+  const tintedLogos = new Map();
+  function tintLogo(img, w, h, color) {
+    const key = `${img.src}|${Math.round(w)}x${Math.round(h)}|${color}`;
+    if (tintedLogos.has(key)) return tintedLogos.get(key);
+    if (tintedLogos.size > 40) tintedLogos.clear(); // preview and export sizes come and go
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0, c.width, c.height);
+    const px = g.getImageData(0, 0, c.width, c.height);
+    const d = px.data;
+    const [r, gr, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.max(d[i], d[i + 1], d[i + 2]) < 70) {
+        d[i] = r;
+        d[i + 1] = gr;
+        d[i + 2] = b;
+      }
+    }
+    g.putImageData(px, 0, 0);
+    tintedLogos.set(key, c);
+    return c;
+  }
+
   function drawFramed(canvas, photo, exifOverride) {
     const L = layoutFrame(photo.width, photo.height, exifOverride);
     if (canvas.width !== L.canvasW || canvas.height !== L.canvasH) {
@@ -1205,7 +1289,26 @@
     ctx.fillStyle = frame.backgroundColor;
     ctx.fillRect(0, 0, L.canvasW, L.canvasH);
     ctx.drawImage(photo, L.imgX, L.imgY);
-    if (L.caption?.style === "bar") {
+    if (L.caption?.style === "spread") {
+      const c = L.caption;
+      const fam = captionFamily();
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      ctx.fillStyle = frame.textColor;
+      ctx.font = `500 ${c.size}px ${fam}`;
+      for (const it of c.items) ctx.fillText(it.text, it.x, c.y);
+      // The name sits on the photo: white with a soft shadow so it reads on light and dark areas.
+      ctx.save();
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#fff";
+      ctx.shadowColor = "rgb(0 0 0 / 0.45)";
+      for (const l of c.overlay.lines) {
+        ctx.shadowBlur = l.size * 0.35;
+        ctx.font = `${l.weight} ${l.size}px ${fam}`;
+        ctx.fillText(l.text, c.overlay.x, l.y);
+      }
+      ctx.restore();
+    } else if (L.caption?.style === "bar") {
       const c = L.caption;
       const fam = captionFamily();
       ctx.textBaseline = "middle";
@@ -1222,7 +1325,11 @@
         });
       }
       ctx.globalAlpha = 1;
-      if (c.brand) {
+      const logos = c.brand?.parts.map((p) => brandLogo(p.name));
+      if (logos?.length && logos.every(Boolean)) {
+        c.brand.parts.forEach((p, i) => ctx.drawImage(p.tint ? tintLogo(logos[i], p.w, p.h, frame.textColor) : logos[i], p.x, p.y, p.w, p.h));
+      } else if (c.brand?.text) {
+        // no logo for this maker (or it's still loading): the name as a wordmark
         ctx.textAlign = "right";
         ctx.font = `800 ${c.brand.size}px ${fam}`;
         ctx.fillText(c.brand.text, c.brand.x, c.brand.y);
@@ -1628,7 +1735,18 @@
 
   <section class="stage" aria-label="Preview">
     <div class="fit" style:display={processedImage ? "flex" : "none"}>
-      <div class="print" style:--ar={canvasAspect}>
+      <!-- svelte-ignore a11y_no_static_element_interactions (keyboard: hold \ or the "Hold for original" button) -->
+      <div
+        class="print"
+        style:--ar={canvasAspect}
+        bind:this={printEl}
+        title={cropping ? undefined : "Press and hold to see the original"}
+        onpointerdown={holdPhoto}
+        onpointerup={releasePhoto}
+        onpointerleave={releasePhoto}
+        onpointercancel={releasePhoto}
+        oncontextmenu={(e) => e.preventDefault()}
+      >
         <canvas
           bind:this={canvasEl}
           aria-label="Preview of {activeItem?.name ?? 'your photo'}"
@@ -1703,6 +1821,7 @@
     {#if processedImage}
       <button
         class="hold"
+        bind:this={holdEl}
         class:on={showOriginal}
         aria-label="Hold to see the original"
         title="Hold to see the original (\)"
@@ -1798,7 +1917,7 @@
           <h2>{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
           <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
         </div>
-        <button class="btn accent done" onclick={closeTray}>Done</button>
+        <button class="btn accent done" onclick={() => glide(closeTray)}>Done</button>
       </div>
 
       <div class="body" id="tool-body">
@@ -1941,17 +2060,18 @@
 <style>
   /* ── Shell ───────────────────────────────────────────────────────────────
      Darkroom: a neutral workspace (it doesn't tint how you judge colour), one amber accent, flat
-     surfaces split by hairlines. Desktop reads left to right: tools · photo · settings of that tool. */
+     surfaces split by hairlines. Desktop: the photo, then one dock beside it (the tool's settings next to
+     the photo, the tool rail on the outer edge), so picking, adjusting and judging stay in one small area. */
   .app {
     position: relative;
     height: 100dvh;
     display: grid;
-    grid-template-columns: 88px minmax(0, 1fr) 340px;
+    grid-template-columns: minmax(0, 1fr) 340px 88px;
     grid-template-rows: auto minmax(0, 1fr) auto;
     grid-template-areas:
       "bar bar bar"
-      "rail stage panel"
-      "rail strip panel";
+      "stage panel rail"
+      "strip panel rail";
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
     background: var(--stage);
@@ -2099,6 +2219,11 @@
   }
   .print {
     position: relative;
+    /* press-and-hold to compare: no text selection, callout menu or page panning while held */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
     width: min(100cqw, 100cqh * var(--ar));
     aspect-ratio: var(--ar);
     border-radius: 3px;
@@ -2273,7 +2398,7 @@
     padding: 10px 8px;
     overflow-y: auto;
     scrollbar-width: none;
-    border-right: 1px solid var(--line);
+    border-left: 1px solid var(--line);
   }
   .tab {
     position: relative;
@@ -2302,7 +2427,7 @@
     color: var(--text);
     background: var(--field);
   }
-  /* the selected tool: an amber mark on the edge facing the photo */
+  /* the selected tool: an amber mark on the edge facing its settings */
   .tab[aria-pressed="true"]::before {
     content: "";
     position: absolute;
@@ -2579,7 +2704,7 @@
       overflow-x: auto;
       overflow-y: hidden;
       padding: 6px 8px;
-      border-right: 0;
+      border-left: 0;
       border-top: 1px solid var(--line);
     }
     .tab {
@@ -2609,7 +2734,14 @@
     .panel.open {
       animation: tray-up 380ms cubic-bezier(0.34, 1.3, 0.64, 1);
     }
+    /* While closing, the tray leaves the layout so the photo can grow at the same time as the tray slides
+       down. An absolute grid item is placed in its own (now zero-height) grid row, which sits right on
+       top of the tool row, so bottom: 0 keeps it exactly where it was. */
     .panel.closing {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
       animation: tray-down 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
     }
     .rail {
@@ -2654,7 +2786,7 @@
   /* Landscape phones: desktop's left-to-right layout (a bottom tray would squash the photo), slimmer. */
   @media (max-height: 500px) {
     .app:not(.empty) {
-      grid-template-columns: 72px minmax(0, 1fr) 280px;
+      grid-template-columns: minmax(0, 1fr) 280px 72px;
     }
     .bar {
       min-height: 44px;

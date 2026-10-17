@@ -23,8 +23,10 @@
  * @param {number} o.posX  0–100 across the photo's width
  * @param {number} o.posY  0–100 inside the caption border (0 = next to the photo)
  * @param {(text: string, px: number, weight?: number) => number} o.measure  text width at a given size
- * @param {"stack"|"bar"} [o.style]  "bar": camera-brand bar (model and lens left; brand, divider and settings right)
- * @param {string} [o.brand]  brand wordmark for the bar, e.g. "SONY"
+ * @param {"stack"|"bar"|"spread"} [o.style]  "bar": camera-brand bar (model and lens left; brand, divider and settings
+ *   right). "spread": one slim row of settings spaced across the photo's width, camera name laid on the photo.
+ * @param {string|{ text: string, parts: { aspect: number, height: number }[] }} [o.brand]  the bar's brand: a text
+ *   wordmark ("SONY"), or logos (see brandLogos.js) given by shape: width/height and height relative to text size
  */
 /**
  * In a fixed ratio, which border the ratio fills by itself: "v" (top and bottom) for photos wider than
@@ -43,8 +45,12 @@ export function computeFrameLayout(srcW, srcH, lines, o) {
   const padY = auto === "v" ? 0 : Math.round((srcH * o.marginV) / 100);
 
   // Caption size; shrunk so the longest line is never wider than the photo.
-  let size = 0, width = 0, blockH = 0, gap = 0, band = 0, bar = null;
-  if (lines.length && o.style === "bar") {
+  let size = 0, width = 0, blockH = 0, gap = 0, band = 0, bar = null, spread = null;
+  if (lines.length && o.style === "spread") {
+    spread = spreadMetrics(srcW, lines, o.fontSize * unit, o);
+    ({ size, blockH, gap } = spread);
+    band = spread.parts.length ? blockH + 2 * gap : 0; // only the name on the photo: no caption border at all
+  } else if (lines.length && o.style === "bar") {
     bar = barMetrics(srcW, lines, o.fontSize * unit, o);
     ({ size, width, blockH, gap } = bar);
     band = blockH + 2 * gap;
@@ -88,7 +94,13 @@ export function computeFrameLayout(srcW, srcH, lines, o) {
   }
 
   let caption = null;
-  if (band && bar) {
+  if (spread) {
+    const zoneStart = top ? 0 : imgY + srcH;
+    const zoneEnd = top ? imgY : canvasH;
+    const t = Math.min(1, Math.max(0, (top ? 100 - o.posY : o.posY) / 100));
+    const y0 = zoneStart + gap + (zoneEnd - zoneStart - 2 * gap - blockH) * t;
+    caption = placeSpread(spread, imgX, imgY, srcW, srcH, y0, lines);
+  } else if (band && bar) {
     const zoneStart = top ? 0 : imgY + srcH;
     const zoneEnd = top ? imgY : canvasH;
     const t = Math.min(1, Math.max(0, (top ? 100 - o.posY : o.posY) / 100));
@@ -115,18 +127,27 @@ export function computeFrameLayout(srcW, srcH, lines, o) {
 // Sized so the whole row fits inside the photo's width with an inset on both sides.
 const SUB = 0.78; // second-row text size, relative to the first
 const BRAND = 1.3; // wordmark size, relative to the first row
+const LOGO_GAP = 0.45; // space between two logos (SONY  α), relative to text size
 
 function barMetrics(srcW, lines, size0, o) {
   const left = lines.filter((l) => l.type === "model" || l.type === "lens");
   const right = lines.filter((l) => l.type === "settings" || l.type === "extra");
-  const brand = (o.brand ?? "").trim();
+  const mark = typeof o.brand === "object" && o.brand ? o.brand : { text: o.brand ?? "", parts: [] };
+  const text = (mark.text ?? "").trim();
+  const parts = mark.parts ?? [];
+  const brand = parts.length > 0 || text.length > 0;
+  const brandW = (size) =>
+    parts.length
+      ? parts.reduce((w, p) => w + p.height * size * p.aspect, 0) + (parts.length - 1) * size * LOGO_GAP
+      : text ? o.measure(text, size * BRAND, 800) : 0;
+  const brandH = (size) => (parts.length ? Math.max(...parts.map((p) => p.height * size)) : size * BRAND);
   const inset = srcW * 0.03;
   const blockW = (block, size) =>
     Math.max(0, ...block.map((l, i) => o.measure(l.text, i ? size * SUB : size, i ? 400 : 600)));
   const widthAt = (size) => {
     const lw = blockW(left, size);
     const rw = blockW(right, size);
-    const bw = brand ? o.measure(brand, size * BRAND, 800) : 0;
+    const bw = brandW(size);
     const gaps = (left.length && (right.length || brand) ? 2 : 0) + (brand && right.length ? 2 : 0);
     return { lw, rw, bw, total: lw + rw + bw + gaps * size };
   };
@@ -139,8 +160,8 @@ function barMetrics(srcW, lines, size0, o) {
   }
   const rows = Math.max(left.length, right.length, 1);
   const lineH = size * 1.45;
-  const blockH = Math.max(rows === 2 ? lineH + size * SUB : size, brand ? size * BRAND : 0);
-  return { left, right, brand, inset, size, lineH, rows, blockH, gap: size * 1.1, width: w.total, ...w };
+  const blockH = Math.max(rows === 2 ? lineH + size * SUB : size, brand ? brandH(size) : 0);
+  return { left, right, brand, text, parts, inset, size, lineH, rows, blockH, gap: size * 1.1, width: w.total, ...w };
 }
 
 function placeBar(m, imgX, srcW, top, lines) {
@@ -161,7 +182,69 @@ function placeBar(m, imgX, srcW, top, lines) {
     y0: top,
     left: { x: imgX + m.inset, lines: m.left, ys: rowsY(m.left) },
     right: { x: rightX, lines: m.right, ys: rowsY(m.right) },
-    brand: m.brand ? { x: brandRight, y: mid, text: m.brand, size: m.size * BRAND, width: m.bw } : null,
+    brand: m.brand ? { x: brandRight, y: mid, text: m.text, size: m.size * BRAND, width: m.bw, parts: placeLogos(m, brandRight - m.bw, mid) } : null,
     divider: m.brand && m.right.length ? { x: rightX - m.rw - m.size, y1: mid - m.blockH / 2, y2: mid + m.blockH / 2 } : null,
+  };
+}
+
+// Logos left to right, ending at the brand's right edge, each centred on the row.
+function placeLogos(m, x, mid) {
+  return m.parts.map((p) => {
+    const h = p.height * m.size;
+    const w = h * p.aspect;
+    const placed = { name: p.name, tint: p.tint, x, y: mid - h / 2, w, h };
+    x += w + m.size * LOGO_GAP;
+    return placed;
+  });
+}
+
+// ─── Spread ──────────────────────────────────────────────────────────────────
+// A slim row under the photo with each setting spaced evenly across its width ("1/200   F/10   ISO 1600"),
+// and the camera name (and lens) laid on the photo's bottom-right corner in white.
+const OVER_MAX = 0.6; // the name on the photo never takes more than this share of the photo's width
+
+function spreadMetrics(srcW, lines, size0, o) {
+  const parts = lines.filter((l) => l.type === "settings" || l.type === "extra").flatMap((l) => l.parts ?? [l.text]);
+  const over = lines.filter((l) => l.type === "model" || l.type === "lens");
+  // Row text a little smaller than the stacked caption: it's one line of numbers.
+  let size = size0 * 0.8;
+  const widthsAt = (s) => parts.map((t) => o.measure(t, s, 500));
+  let widths = widthsAt(size);
+  const total = widths.reduce((a, b) => a + b, 0) + (parts.length + 1) * size * 1.2; // room for a clear gap
+  if (total > srcW) {
+    size *= srcW / total; // widths and gaps scale with size, so this fits exactly
+    widths = widthsAt(size);
+  }
+  let overSize = size0 * 1.1;
+  const overW = Math.max(0, ...over.map((l) => o.measure(l.text, l.type === "model" ? overSize : overSize * 0.75, l.type === "model" ? 600 : 400)));
+  if (overW > srcW * OVER_MAX) overSize *= (srcW * OVER_MAX) / overW;
+  return { parts, widths, over, overSize, size, blockH: size, gap: size * 0.9 };
+}
+
+function placeSpread(m, imgX, imgY, srcW, srcH, y0, lines) {
+  const step = (srcW - m.widths.reduce((a, b) => a + b, 0)) / (m.parts.length + 1); // equal space around every item
+  let x = imgX + step;
+  const items = m.parts.map((text, i) => {
+    const item = { text, x, width: m.widths[i] };
+    x += m.widths[i] + step;
+    return item;
+  });
+  const inset = srcW * 0.045;
+  let y = imgY + srcH - inset;
+  const overlay = [...m.over].reverse().map((l) => {
+    const size = l.type === "model" ? m.overSize : m.overSize * 0.75;
+    const line = { text: l.text, size, weight: l.type === "model" ? 600 : 400, y: y - size / 2 };
+    y -= size * 1.45;
+    return line;
+  }).reverse();
+  return {
+    style: "spread",
+    lines,
+    size: m.size,
+    y0,
+    blockH: m.blockH,
+    y: y0 + m.blockH / 2,
+    items,
+    overlay: { x: imgX + srcW - inset, lines: overlay },
   };
 }

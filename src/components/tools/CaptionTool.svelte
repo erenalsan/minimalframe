@@ -66,6 +66,7 @@
       <div class="seg">
         <button aria-pressed={frame.captionStyle === "stack"} onclick={() => (frame.captionStyle = "stack")}>Stacked</button>
         <button aria-pressed={frame.captionStyle === "bar"} onclick={() => (frame.captionStyle = "bar")} title="Model and lens on the left; brand and settings on the right, like a camera watermark">Brand bar</button>
+        <button aria-pressed={frame.captionStyle === "spread"} onclick={() => (frame.captionStyle = "spread")} title="Settings spread across one slim row under the photo, camera name on the photo: the photo gets almost the whole frame">Spread</button>
       </div>
     </div>
     {#if item}

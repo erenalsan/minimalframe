@@ -70,7 +70,9 @@ for (const [srcW, srcH] of [[1080, 720], [720, 1080], [6000, 4000], [400, 1200]]
   for (const [ratioId, wh] of Object.entries(RATIOS)) {
     for (const zone of ['top', 'bottom']) {
       for (const fontSize of [10, 24, 80]) {
-        for (const brand of ['', 'FUJIFILM']) {
+        for (const brand of ['', 'FUJIFILM',
+          { text: 'SONY', parts: [{ name: 'sony', aspect: 5.69, height: 0.9 }, { name: 'sony-alpha', aspect: 1.4, height: 1.3 }] },
+          { text: 'NIKON', parts: [{ name: 'nikon', aspect: 1, height: 2.1 }] }]) {
           for (const set of [lines, lines.slice(0, 1), [lines[2]]]) {
             const L = computeFrameLayout(srcW, srcH, set, {
               marginH: 0, marginV: 0, ratioId, ratio: wh && { w: wh[0], h: wh[1] }, captionSpace: 12,
@@ -88,6 +90,12 @@ for (const [srcW, srcH] of [[1080, 720], [720, 1080], [6000, 4000], [400, 1200]]
             const brandStart = c.brand ? c.brand.x - c.brand.width : c.right.x - c.width + (leftEnd - c.left.x);
             assert.ok(c.left.x >= L.imgX && c.right.x <= L.imgX + srcW + 0.5, `bar wider than photo: ${where}`);
             if (c.brand && c.left.lines.length) assert.ok(leftEnd <= brandStart + 0.5, `left text runs into brand: ${where}`);
+            // Logos: inside the bar's height, in order, ending at the brand's right edge.
+            for (const [i, p] of (c.brand?.parts ?? []).entries()) {
+              assert.ok(p.y >= c.y0 - 0.5 && p.y + p.h <= c.y0 + c.blockH + 0.5, `logo taller than the bar: ${where}`);
+              if (i) assert.ok(p.x >= c.brand.parts[i - 1].x + c.brand.parts[i - 1].w, `logos overlap: ${where}`);
+            }
+            if (c.brand?.parts.length) assert.ok(Math.abs(c.brand.parts.at(-1).x + c.brand.parts.at(-1).w - c.brand.x) < 0.5, `logos don't end at the brand edge: ${where}`);
             bars++;
           }
         }
@@ -96,4 +104,42 @@ for (const [srcW, srcH] of [[1080, 720], [720, 1080], [6000, 4000], [400, 1200]]
   }
 }
 
-console.log(`frameLayout: ${n} layouts + ${bars} bars OK`);
+// Spread: row items inside the photo's width, in order, not touching; the row stays off the photo;
+// the name on the photo stays inside it.
+let spreads = 0;
+const parted = [lines[0], lines[1], { type: 'settings', text: '', parts: ['1/200', 'F/10', 'ISO 1600', '+/1.3', '55mm'] }, { type: 'extra', text: '', parts: ['Kyoto, a very long note about the evening'] }];
+for (const [srcW, srcH] of [[1080, 720], [720, 1080], [6000, 4000], [400, 1200]]) {
+  for (const [ratioId, wh] of Object.entries(RATIOS)) {
+    for (const zone of ['top', 'bottom']) {
+      for (const fontSize of [10, 24, 80]) {
+        for (const set of [parted, parted.slice(0, 1), parted.slice(2, 3)]) {
+          const L = computeFrameLayout(srcW, srcH, set, {
+            marginH: 2, marginV: 2, ratioId, ratio: wh && { w: wh[0], h: wh[1] }, captionSpace: 12,
+            fontSize, zone, align: 'left', posX: 0, posY: 50, measure, style: 'spread',
+          });
+          const c = L.caption;
+          const where = JSON.stringify({ srcW, srcH, ratioId, zone, fontSize, n: set.length });
+          assert.equal(c.style, 'spread');
+          let prevEnd = L.imgX;
+          for (const it of c.items) {
+            assert.ok(it.x >= prevEnd - 0.5, `items overlap or out of order: ${where}`);
+            prevEnd = it.x + measure(it.text, c.size);
+          }
+          assert.ok(prevEnd <= L.imgX + srcW + 0.5, `row wider than photo: ${where}`);
+          if (c.items.length) {
+            if (zone === 'bottom') assert.ok(c.y0 >= L.imgY + srcH - 0.5, `row covers photo: ${where}`);
+            else assert.ok(c.y0 + c.blockH <= L.imgY + 0.5, `row covers photo: ${where}`);
+            assert.ok(c.y0 >= 0 && c.y0 + c.blockH <= L.canvasH + 0.5, `row off canvas: ${where}`);
+          }
+          for (const l of c.overlay.lines) {
+            assert.ok(l.y - l.size / 2 >= L.imgY && l.y + l.size / 2 <= L.imgY + srcH, `name off the photo: ${where}`);
+            assert.ok(measure(l.text, l.size) <= srcW * 0.6 + 0.5, `name too wide: ${where}`);
+          }
+          spreads++;
+        }
+      }
+    }
+  }
+}
+
+console.log(`frameLayout: ${n} layouts + ${bars} bars + ${spreads} spreads OK`);

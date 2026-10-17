@@ -160,6 +160,7 @@ export const BUILTIN_PRESETS = [
   tpl("cinema", "Cinema", { selectedRatioId: "16:9", customMarginH: 5, customMarginV: 5, backgroundColor: "#000000", selectedFontId: "bebas", textAlign: "center", filmGrain: 25, softBloom: 20 }),
   tpl("brandbar", "Brand bar", { selectedRatioId: "orig", customMarginH: 0, customMarginV: 0, captionSpace: 0, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left", captionStyle: "bar", autoFontSize: false, manualFontSize: 22 }),
   tpl("brandbar-dark", "Brand bar dark", { selectedRatioId: "4:5", customMarginH: 0, customMarginV: 0, backgroundColor: "#111111", selectedFontId: "montserrat", textAlign: "left", captionStyle: "bar", autoFontSize: false, manualFontSize: 22 }),
+  tpl("spread", "Spread", { selectedRatioId: "4:5", customMarginH: 3, customMarginV: 3, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left", captionStyle: "spread" }),
   tpl("story", "Story poster", { selectedRatioId: "9:16", customMarginH: 8, customMarginV: 8, backgroundColor: "#111111", selectedFontId: "bebas", textAlign: "center" }),
 ];
 
