@@ -142,4 +142,37 @@ for (const [srcW, srcH] of [[1080, 720], [720, 1080], [6000, 4000], [400, 1200]]
   }
 }
 
-console.log(`frameLayout: ${n} layouts + ${bars} bars + ${spreads} spreads OK`);
+// Fill (carousel): exact strip shape, photo spans the full width inside an even border, cropped from the
+// centre of the source, never upscaled, caption beside (not over) the photo.
+let fills = 0;
+for (const [srcW, srcH] of [[2400, 3000], [6000, 4000], [12000, 2000], [4000, 4000], [800, 2400]]) {
+  for (const slides of [2, 3, 5, 10]) {
+    for (const [w1, h1] of [[4, 5], [1, 1]]) {
+      for (const style of ['stack', 'bar', 'spread']) {
+        for (const set of [lines, []]) {
+          for (const zone of ['top', 'bottom']) {
+            const ratio = { w: w1 * slides, h: h1 };
+            const L = computeFrameLayout(srcW, srcH, set, {
+              marginH: 3, marginV: 3, ratioId: 'carousel', ratio, captionSpace: 12, fontSize: 24, zone, align: 'left',
+              posX: 0, posY: 50, measure, style, fill: true, brand: 'SONY',
+            });
+            const where = JSON.stringify({ srcW, srcH, slides, w1, style, n: set.length, zone });
+            const c = L.crop;
+            assert.ok(Math.abs(L.canvasW / L.canvasH / (ratio.w / ratio.h) - 1) < 0.01, `wrong strip shape: ${where}`); // 1 px of rounding on a thin strip
+            assert.ok(c.sw <= srcW && c.sh <= srcH && c.sx >= 0 && c.sy >= 0 && c.sx + c.sw <= srcW && c.sy + c.sh <= srcH, `crop outside photo: ${where}`);
+            assert.ok(Math.abs(L.imgX - (L.canvasW - c.sw) / 2) <= 1, `photo not centred across: ${where}`);
+            assert.ok(L.imgY + c.sh <= L.canvasH, `photo off canvas: ${where}`);
+            if (L.caption && style === 'stack') {
+              const capTop = L.caption.y0 - L.caption.size / 2;
+              if (zone === 'bottom') assert.ok(capTop >= L.imgY + c.sh - 0.5, `caption covers photo: ${where}`);
+              assert.ok(L.caption.width <= c.sw + 0.5, `caption wider than photo: ${where}`);
+            }
+            fills++;
+          }
+        }
+      }
+    }
+  }
+}
+
+console.log(`frameLayout: ${n} layouts + ${bars} bars + ${spreads} spreads + ${fills} fills OK`);

@@ -4,7 +4,7 @@
   import { DEV_DEFAULTS, freshDev, develop, cssFilterFor } from "../../lib/developEngine.js";
   import { LOOKS } from "../../lib/catalog.js";
   import { parseRecipe } from "../../lib/recipes.js";
-  import { imageStats, matchLook } from "../../lib/matchLook.js";
+  import { imageStats, matchLook, autoTarget } from "../../lib/matchLook.js";
   import { lutLib, importLutFiles, deleteLut } from "../../lib/lutLibrary.svelte.js";
 
   let {
@@ -68,6 +68,17 @@
   // ─── Match look ────────────────────────────────────────────────────────────
   // Makes photos look like one shoot: brightness, white balance, contrast and colour follow a reference photo.
   const pixels = (c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+
+  // ─── Auto ──────────────────────────────────────────────────────────────────
+  // Brightness, contrast, white balance and colour worked out from this photo (see autoTarget), on top of no
+  // other edits, like any look. Computed on the 160px proxy, so it's instant.
+  const autoLook = $derived.by(() => {
+    if (!item?.small || !canDevelop) return null;
+    const work = document.createElement("canvas");
+    const measure = (p) => imageStats(pixels(develop(item.small, p, work)));
+    const params = matchLook(freshDev(), autoTarget(measure(freshDev())), measure);
+    return { id: "auto", name: "Auto", params, thumb: develop(item.small, params, work).toDataURL("image/jpeg", 0.8) };
+  });
   function matchItemTo(item, ref) {
     const work = document.createElement("canvas");
     const target = imageStats(pixels(develop(ref.small, ref.dev, work)));
@@ -105,6 +116,14 @@
 </script>
 
 <div class="looks">
+  {#if autoLook}
+    <div class="look-cell">
+      <button class="look auto" aria-pressed={isLookActive(autoLook)} onclick={() => applyLook(autoLook)} title="Fixes brightness, contrast, white balance and colour for this photo">
+        <img src={autoLook.thumb} alt="" />
+        <span>Auto</span>
+      </button>
+    </div>
+  {/if}
   {#each allLooks as look (look.id)}
     <div class="look-cell">
       <button class="look" aria-pressed={isLookActive(look)} onclick={() => applyLook(look)}>
@@ -219,6 +238,11 @@
   }
   .look[aria-pressed="true"] img {
     outline-color: var(--accent-ink);
+  }
+  /* Auto stands out from the looks: an amber sparkle on its name */
+  .look.auto span::before {
+    content: "✦ ";
+    color: var(--accent-ink, var(--accent));
   }
   .look-cell {
     position: relative;

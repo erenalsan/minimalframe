@@ -1,6 +1,6 @@
 <script>
   // Ready-made and saved frame templates, plus backing up / importing your own templates and looks.
-  import { BUILTIN_PRESETS, RATIOS, SYSTEM_FONTS } from "../../lib/catalog.js";
+  import { BUILTIN_PRESETS, SYSTEM_FONTS, frameRatio } from "../../lib/catalog.js";
   import { getContrastingColor } from "../../lib/imageUtils.js";
   import { allFonts } from "../../lib/fontLibrary.svelte.js";
 
@@ -9,7 +9,7 @@
 
 <div class="templates">
   {#each [...BUILTIN_PRESETS, ...userPresets] as p (p.id)}
-    {@const r = RATIOS.find((x) => x.id === p.selectedRatioId)}
+    {@const r = frameRatio(p)}
     {@const f = allFonts().find((x) => x.id === p.selectedFontId) || SYSTEM_FONTS[0]}
     <div class="template">
       <button onclick={() => onapply(p)} aria-label="Apply template {p.name}">

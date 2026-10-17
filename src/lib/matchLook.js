@@ -41,3 +41,18 @@ export function matchLook(params, target, measure, iterations = 6) {
   }
   return p;
 }
+
+/**
+ * Where "Auto" aims, from the photo's own stats (as shot): brightness pulled most of the way to a mid-tone,
+ * flat photos given more contrast (never less), colour casts reduced but not erased (a sunset stays warm),
+ * and a little more colour for muted photos only.
+ */
+export function autoTarget(s) {
+  return {
+    L: s.L + (0.46 - s.L) * 0.7,
+    sd: Math.max(s.sd, 0.2),
+    a: s.a * 0.4,
+    b: s.b * 0.55,
+    chroma: Math.max(s.chroma, Math.min(0.16, s.chroma * 1.35)),
+  };
+}

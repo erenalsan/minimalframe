@@ -3,21 +3,68 @@
   import { RATIOS } from "../../lib/catalog.js";
 
   let { frame = $bindable(), slices } = $props();
+  const setSlides = (n) => (frame.slides = Math.min(10, Math.max(2, n)));
 </script>
 
 <div class="ratios">
   {#each RATIOS as r (r.id)}
     <button class="ratio" aria-pressed={frame.selectedRatioId === r.id} onclick={() => (frame.selectedRatioId = r.id)}>
-      <span class="ratio-glyph" class:loose={!r.w} style:aspect-ratio={r.w ? `${r.w} / ${r.h}` : r.id === "orig" ? "3 / 3.6" : "3 / 2.4"}></span>
+      <span class="ratio-glyph" class:loose={!r.w} style:aspect-ratio={r.w ? `${r.w} / ${r.h}` : r.id === "orig" ? "3 / 3.6" : r.id === "carousel" ? "12 / 5" : "3 / 2.4"}></span>
       <span>{r.label}</span>
     </button>
   {/each}
 </div>
-{#if slices > 1}
-  <p class="hint">Exports {slices} separate 4:5 slides that line up seamlessly when people swipe your carousel.</p>
+{#if frame.selectedRatioId === "carousel"}
+  <div class="carousel">
+    <div class="stepper" role="group" aria-label="Number of slides">
+      <span class="label">Slides</span>
+      <button onclick={() => setSlides(slices - 1)} disabled={slices <= 2} aria-label="Fewer slides">−</button>
+      <output aria-live="polite">{slices}</output>
+      <button onclick={() => setSlides(slices + 1)} disabled={slices >= 10} aria-label="More slides">+</button>
+    </div>
+    <div class="seg" role="group" aria-label="Slide shape">
+      <button aria-pressed={frame.slideShape !== "1:1"} onclick={() => (frame.slideShape = "4:5")}>4:5</button>
+      <button aria-pressed={frame.slideShape === "1:1"} onclick={() => (frame.slideShape = "1:1")}>Square</button>
+    </div>
+  </div>
+  <p class="hint">
+    Your photo fills all {slices} slides (cropped from the centre to fit) and they line up seamlessly as people swipe.
+    Each slide is saved at up to {frame.slideShape === "1:1" ? "1080 × 1080" : "1080 × 1350"}, Instagram's full size, so
+    wide shots keep their detail.
+  </p>
 {/if}
 
 <style>
+  .carousel {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .stepper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .stepper .label {
+    margin-right: 6px;
+  }
+  .stepper button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--field);
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+  .stepper output {
+    min-width: 2ch;
+    text-align: center;
+    font-size: 1.1rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
   /* Ratios */
   .ratios {
     display: grid;

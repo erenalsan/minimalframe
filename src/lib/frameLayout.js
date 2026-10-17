@@ -25,6 +25,8 @@
  * @param {(text: string, px: number, weight?: number) => number} o.measure  text width at a given size
  * @param {"stack"|"bar"|"spread"} [o.style]  "bar": camera-brand bar (model and lens left; brand, divider and settings
  *   right). "spread": one slim row of settings spaced across the photo's width, camera name laid on the photo.
+ * @param {boolean} [o.fill]  with a ratio: crop the photo to fill the frame instead of padding (carousels);
+ *   the result then has crop = { sx, sy, sw, sh } (the part of the photo to draw) and the photo's size is sw × sh
  * @param {string|{ text: string, parts: { aspect: number, height: number }[] }} [o.brand]  the bar's brand: a text
  *   wordmark ("SONY"), or logos (see brandLogos.js) given by shape: width/height and height relative to text size
  */
@@ -44,54 +46,99 @@ export function computeFrameLayout(srcW, srcH, lines, o) {
   const padX = auto === "h" ? 0 : Math.round((srcW * o.marginH) / 100);
   const padY = auto === "v" ? 0 : Math.round((srcH * o.marginV) / 100);
 
-  // Caption size; shrunk so the longest line is never wider than the photo.
-  let size = 0, width = 0, blockH = 0, gap = 0, band = 0, bar = null, spread = null;
-  if (lines.length && o.style === "spread") {
-    spread = spreadMetrics(srcW, lines, o.fontSize * unit, o);
-    ({ size, blockH, gap } = spread);
-    band = spread.parts.length ? blockH + 2 * gap : 0; // only the name on the photo: no caption border at all
-  } else if (lines.length && o.style === "bar") {
-    bar = barMetrics(srcW, lines, o.fontSize * unit, o);
-    ({ size, width, blockH, gap } = bar);
-    band = blockH + 2 * gap;
-  } else if (lines.length) {
-    size = o.fontSize * unit;
-    width = Math.max(...lines.map((l) => o.measure(l.text, size)));
-    const maxW = srcW * 0.96;
-    if (width > maxW) {
-      size *= maxW / width;
-      width = maxW;
+  // Caption size; shrunk so the longest line is never wider than the photo (w: the photo's width).
+  const captionFor = (w, scale = 1) => {
+    const fontPx = o.fontSize * unit * scale;
+    if (lines.length && o.style === "spread") {
+      const spread = spreadMetrics(w, lines, fontPx, o);
+      // only the name on the photo: no caption border at all
+      return { ...spread, band: spread.parts.length ? spread.blockH + 2 * spread.gap : 0, spread };
     }
-    blockH = (lines.length - 1) * size * 1.5 + size;
-    gap = size * 0.8;
-    band = blockH + 2 * gap; // border needed to hold the caption
-  }
-
+    if (lines.length && o.style === "bar") {
+      const bar = barMetrics(w, lines, fontPx, o);
+      return { ...bar, band: bar.blockH + 2 * bar.gap, bar };
+    }
+    if (!lines.length) return { size: 0, width: 0, blockH: 0, gap: 0, band: 0 };
+    let size = fontPx;
+    let width = Math.max(...lines.map((l) => o.measure(l.text, size)));
+    if (width > w * 0.96) {
+      size *= (w * 0.96) / width;
+      width = w * 0.96;
+    }
+    const blockH = (lines.length - 1) * size * 1.5 + size;
+    const gap = size * 0.8;
+    return { size, width, blockH, gap, band: blockH + 2 * gap }; // band: border needed to hold the caption
+  };
+  let cap = captionFor(srcW);
   const top = o.zone === "top";
-  let mTop = padY, mBottom = padY;
-  if (band) {
-    const extra = o.ratioId === "orig" ? (srcH * o.captionSpace) / 100 : 0;
-    const zone = Math.ceil(Math.max(band, padY + extra));
-    if (top) mTop = zone;
-    else mBottom = zone;
-  }
-  let canvasW = srcW + 2 * padX;
-  let canvasH = srcH + mTop + mBottom;
-  let imgX = padX;
-  let imgY = mTop;
-  if (o.ratio?.w) {
-    // Pad out to the target ratio; extra space is shared, so the caption border only grows.
+  let canvasW, canvasH, imgX, imgY, crop = null;
+
+  if (o.fill && o.ratio?.w) {
+    // Fill (carousel): the canvas has the ratio's shape and the photo is cropped to exactly the space left
+    // after an even border and the caption, so it spans every slide. A photo wider than the strip keeps its
+    // full height and loses a little from its sides instead.
     const ar = o.ratio.w / o.ratio.h;
-    if (canvasW / canvasH >= ar) {
-      const h = Math.round(canvasW / ar);
-      imgY += Math.floor((h - canvasH) / 2);
-      canvasH = h;
-    } else {
-      const w = Math.round(canvasH * ar);
-      imgX += Math.floor((w - canvasW) / 2);
-      canvasW = w;
+    const margins = (c, pad) => {
+      const zone = c.band ? Math.ceil(Math.max(c.band, pad)) : pad;
+      return top ? [zone, pad] : [pad, zone];
+    };
+    // Border and caption depend on the photo's width, and the width (for photos wider than the strip) on
+    // them; a few rounds settle it.
+    let w = srcW, h = srcH, pad = 0, mt = 0, mb = 0;
+    for (let i = 0; i < 8; i++) {
+      // Border as a share of the strip's height (its short side), so it stays slim on a long strip.
+      // From pad = m × stripH and stripH = (w + 2·pad) / ar: pad = m·w / (ar − 2m).
+      const m = o.marginH / 100;
+      pad = Math.round((m * w) / Math.max(0.1, ar - 2 * m));
+      cap = captionFor(w);
+      // A long thin strip (many slides) can't hold a full-size caption: keep it to 30% of the strip's height.
+      const stripH = (w + 2 * pad) / ar;
+      // (Text already shrunk to fit the width only gets smaller once the requested size drops below that,
+      // so shrink step by step until it fits.)
+      for (let k = 1, j = 0; cap.band > stripH * 0.3 && j < 12; j++) cap = captionFor(w, (k *= (stripH * 0.3) / cap.band));
+      [mt, mb] = margins(cap, pad);
+      h = Math.round((w + 2 * pad) / ar) - mt - mb;
+      if (h <= srcH) break; // tall enough: the photo keeps its full width
+      const narrower = Math.round((srcH + mt + mb) * ar) - 2 * pad;
+      if (narrower >= w) break;
+      w = Math.max(1, narrower);
+    }
+    w = Math.max(1, Math.min(srcW, w));
+    h = Math.max(1, Math.min(srcH, h));
+    crop = { sx: Math.round((srcW - w) / 2), sy: Math.round((srcH - h) / 2), sw: w, sh: h };
+    srcW = w;
+    srcH = h;
+    canvasW = w + 2 * pad;
+    canvasH = h + mt + mb;
+    imgX = pad;
+    imgY = mt;
+  } else {
+    let mTop = padY, mBottom = padY;
+    if (cap.band) {
+      const extra = o.ratioId === "orig" ? (srcH * o.captionSpace) / 100 : 0;
+      const zone = Math.ceil(Math.max(cap.band, padY + extra));
+      if (top) mTop = zone;
+      else mBottom = zone;
+    }
+    canvasW = srcW + 2 * padX;
+    canvasH = srcH + mTop + mBottom;
+    imgX = padX;
+    imgY = mTop;
+    if (o.ratio?.w) {
+      // Pad out to the target ratio; extra space is shared, so the caption border only grows.
+      const ar = o.ratio.w / o.ratio.h;
+      if (canvasW / canvasH >= ar) {
+        const h = Math.round(canvasW / ar);
+        imgY += Math.floor((h - canvasH) / 2);
+        canvasH = h;
+      } else {
+        const w = Math.round(canvasH * ar);
+        imgX += Math.floor((w - canvasW) / 2);
+        canvasW = w;
+      }
     }
   }
+  const { size, width, blockH, gap, band, bar, spread } = cap;
 
   let caption = null;
   if (spread) {
@@ -119,7 +166,7 @@ export function computeFrameLayout(srcW, srcH, lines, o) {
     const x = Math.min(canvasW - gap - right, Math.max(gap + left, imgX + (srcW * o.posX) / 100));
     caption = { lines, size, width, x, y0: centerY - blockH / 2 + size / 2, lineH: size * 1.5, blockH };
   }
-  return { canvasW, canvasH, imgX, imgY, caption };
+  return { canvasW, canvasH, imgX, imgY, caption, crop };
 }
 
 // ─── Camera-brand bar ────────────────────────────────────────────────────────

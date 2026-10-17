@@ -3,7 +3,7 @@
   //
   // App owns the state and the pipeline: the photo list, each photo's edits (dev) and crop, the frame settings,
   // undo/redo, the live preview render and full-resolution export. Everything else lives beside it:
-  //   components/        landing page, export sheet, grid preview, save dialog, icon
+  //   components/        landing page, export sheet, save dialog, icon
   //   components/tools/  one component per tool panel (Looks, Crop, Light…, Templates, Ratio, Caption…)
   //   lib/               pure logic and engines (develop, RAW, layout, colour, LUTs, recipes, EXIF names)
   //   ui.css             shared buttons, controls and dialogs; app.css holds the theme tokens
@@ -17,7 +17,7 @@
     ALIGN_X,
     TOOLS,
     TOOL_HINTS,
-    RATIOS,
+    frameRatio,
     SYSTEM_FONTS,
     EXPORT_SIZES,
     FORMATS,
@@ -73,9 +73,9 @@
 
   // Components
   import ExportSheet from "./components/ExportSheet.svelte";
-  import GridPreview from "./components/GridPreview.svelte";
   import Icon from "./components/Icon.svelte";
   import Landing from "./components/Landing.svelte";
+  import PhotosTray from "./components/PhotosTray.svelte";
   import SaveDialog from "./components/SaveDialog.svelte";
   import Histogram from "./lib/Histogram.svelte";
 
@@ -123,10 +123,19 @@
       trayClosing = false;
     }, 200);
   }
+  let trayView = $state("tool"); // phones: the tray shows the tool's settings, or "photos"
   function pickTool(id) {
     glide(() => {
-      if (trayOpen && !trayClosing && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
+      if (trayOpen && !trayClosing && trayView === "tool" && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
       activeTool[activeTab] = id;
+      trayView = "tool";
+      openTray();
+    });
+  }
+  function togglePhotos() {
+    glide(() => {
+      if (trayOpen && !trayClosing && trayView === "photos") return closeTray();
+      trayView = "photos";
       openTray();
     });
   }
@@ -163,9 +172,8 @@
       });
     });
   }
-  const toolOpen = (id) => activeTool[activeTab] === id && (!compact || trayOpen);
+  const toolOpen = (id) => activeTool[activeTab] === id && (!compact || (trayOpen && trayView === "tool"));
   let exportDialog = $state.raw(null);
-  let gridDialog = $state.raw(null);
   let fileInput = $state.raw(null);
   let canvasAspect = $state(4 / 5); // preview box ratio; updated whenever the canvas is resized
 
@@ -201,22 +209,42 @@
   let showOriginal = $state(false); // before/after: held while comparing
   // Press and hold the photo itself (mouse or finger). A short delay keeps a quick click from flashing the
   // original; while cropping, the photo's pointer belongs to the crop box.
+  // A quick sideways swipe switches to the next or previous photo; moving cancels the hold.
   let holdTimer;
+  let swipe = null;
   function holdPhoto(e) {
     if (cropping || e.button > 0) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId); // keep getting the gesture if the finger leaves the photo
+    swipe = { x: e.clientX, y: e.clientY, t: performance.now() };
     clearTimeout(holdTimer);
     holdTimer = setTimeout(() => (showOriginal = true), 120);
   }
-  function releasePhoto() {
+  function movePhoto(e) {
+    if (swipe && Math.hypot(e.clientX - swipe.x, e.clientY - swipe.y) > 12) {
+      clearTimeout(holdTimer);
+      showOriginal = false;
+    }
+  }
+  function releasePhoto(e) {
     clearTimeout(holdTimer);
     showOriginal = false;
+    if (swipe && e?.type === "pointerup") {
+      const dx = e.clientX - swipe.x;
+      const dy = e.clientY - swipe.y;
+      const quick = performance.now() - swipe.t < 700;
+      if (quick && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+        const next = activeImageIndex + (dx < 0 ? 1 : -1);
+        if (next >= 0 && next < filesList.length) setActiveImage(next);
+      }
+    }
+    swipe = null;
   }
 
   // ─── Crop, straighten, rotate ──────────────────────────────────────────────
   const cropping = $derived(
     activeTab === "editor" &&
       activeTool.editor === "crop" &&
-      (!compact || trayOpen) &&
+      (!compact || (trayOpen && trayView === "tool")) &&
       Boolean(activeItem),
   );
   const crop = $derived(activeItem?.crop ?? CROP_DEFAULT);
@@ -337,6 +365,8 @@
   // Keys are the saved-template keys, so older templates keep loading.
   const frame = $state({
     selectedRatioId: "4:5",
+    slides: 3, // carousel only: how many slides the photo is cut into
+    slideShape: "4:5", // carousel only: "4:5" or "1:1" slides
     customMarginH: 8, // Horizontal margin % (5 - 50%)
     customMarginV: 8, // Vertical margin % (5 - 50%)
     captionSpace: 12, // "Photo + caption" ratio: extra border for the caption, % of photo height
@@ -369,16 +399,15 @@
     },
   });
 
-  const slices = $derived(
-    RATIOS.find((r) => r.id === frame.selectedRatioId)?.slices ?? 1,
-  );
+  const ratio = $derived(frameRatio(frame));
+  const slices = $derived(ratio?.slices ?? 1);
   // In a fixed ratio one border is filled by the ratio itself, so only the other slider is shown.
-  const autoAxis = $derived(
+  const autoAxis = $derived(slices > 1 ? "v" :
     processedImage
       ? autoBorderAxis(
           processedImage.width,
           processedImage.height,
-          RATIOS.find((r) => r.id === frame.selectedRatioId),
+          ratio,
         )
       : null,
   );
@@ -557,6 +586,9 @@
       if (k !== "exifDisplay" && p[k] !== undefined) frame[k] = p[k];
     frame.captionSpace = p.captionSpace ?? 12; // older templates have none
     frame.captionStyle = ["bar", "spread"].includes(p.captionStyle) ? p.captionStyle : "stack";
+    // Templates from before the flexible carousel had fixed 2- and 3-slide ratios.
+    const oldCarousel = /^carousel(\d)$/.exec(p.selectedRatioId ?? "");
+    if (oldCarousel) Object.assign(frame, { selectedRatioId: "carousel", slides: Number(oldCarousel[1]), slideShape: "4:5" });
     if (p.exifDisplay)
       frame.exifDisplay = { ...frame.exifDisplay, ...p.exifDisplay };
   }
@@ -654,56 +686,6 @@
     // Canvas text can't swap fonts by itself; redraw once the bundled caption font is ready.
     document.fonts?.ready.then(() => scheduleRender());
   });
-
-  // ─── Instagram grid preview ────────────────────────────────────────────────
-  // Profile grids show the newest post first, cropped to 3:4; carousels show their first slide.
-  let gridCells = $state([]); // [{ id, url }] newest first
-  const loadImage = (url) =>
-    new Promise((ok, fail) =>
-      Object.assign(new Image(), {
-        onload: (e) => ok(e.target),
-        onerror: fail,
-        src: url,
-      }),
-    );
-  async function renderGrid() {
-    const posts = filesList.filter((f) => f.selected);
-    gridCells = await Promise.all(
-      posts.map(async (f) => {
-        const framed = drawFramed(
-          document.createElement("canvas"),
-          await loadImage(f.thumbUrl),
-          f.exifOverride,
-        );
-        if (slices <= 1)
-          return { id: f.id, url: framed.toDataURL("image/jpeg", 0.85) };
-        const first = document.createElement("canvas");
-        first.width = Math.round(framed.width / slices);
-        first.height = framed.height;
-        first.getContext("2d").drawImage(framed, 0, 0);
-        return { id: f.id, url: first.toDataURL("image/jpeg", 0.85) };
-      }),
-    );
-    gridCells.reverse();
-  }
-  function openGrid() {
-    renderGrid();
-    gridDialog?.showModal();
-  }
-  // Posting order follows the strip: earlier in the strip = posted first = lower on the grid.
-  function movePost(id, towardTop) {
-    const i = filesList.findIndex((f) => f.id === id);
-    const step = towardTop ? 1 : -1;
-    let j = i + step;
-    while (j >= 0 && j < filesList.length && !filesList[j].selected) j += step;
-    if (j < 0 || j >= filesList.length) return;
-    const active = filesList[activeImageIndex];
-    const next = [...filesList];
-    [next[i], next[j]] = [next[j], next[i]];
-    filesList = next;
-    activeImageIndex = filesList.indexOf(active);
-    renderGrid();
-  }
 
   // Photos sent with "Share to MinimalFrame" wait in a cache the service worker filled; open them once.
   async function loadSharedFiles() {
@@ -1219,7 +1201,8 @@
         marginH: frame.customMarginH,
         marginV: frame.customMarginV,
         ratioId: frame.selectedRatioId,
-        ratio: RATIOS.find((r) => r.id === frame.selectedRatioId),
+        ratio,
+        fill: slices > 1,
         captionSpace: frame.captionSpace,
         fontSize: frame.autoFontSize
           ? 26 * dynamicScaleFactor
@@ -1288,7 +1271,9 @@
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = frame.backgroundColor;
     ctx.fillRect(0, 0, L.canvasW, L.canvasH);
-    ctx.drawImage(photo, L.imgX, L.imgY);
+    // Carousels fill the whole strip: the layout says which part of the photo to draw (L.crop).
+    const { sx, sy, sw, sh } = L.crop ?? { sx: 0, sy: 0, sw: photo.width, sh: photo.height };
+    ctx.drawImage(photo, sx, sy, sw, sh, L.imgX, L.imgY, sw, sh);
     if (L.caption?.style === "spread") {
       const c = L.caption;
       const fam = captionFamily();
@@ -1711,6 +1696,12 @@
   <header class="bar">
     <div class="bar-side">
       <span class="wordmark"><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text">MinimalFrame</span></span>
+      {#if activeItem}
+        <button class="photos-btn" class:on={compact && trayOpen && trayView === "photos"} onclick={togglePhotos} aria-label="Your photos ({filesList.length})" title="Your photos">
+          <img src={activeItem.thumbUrl} alt="" />
+          {#if filesList.length > 1}<span class="count">{filesList.length}</span>{/if}
+        </button>
+      {/if}
     </div>
     {#if processedImage}
       <div class="seg modes" role="group" aria-label="Mode">
@@ -1718,10 +1709,9 @@
         <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>Frame</button>
       </div>
       <div class="bar-side end">
-        <button class="icon-btn" onclick={() => fileInput?.click()} aria-label="Add photos" title="Add photos"><Icon name="add" /></button>
+        <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label="Add photos" title="Add photos"><Icon name="add" /></button>
         <button class="icon-btn" onclick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
         <button class="icon-btn" onclick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><Icon name="redo" /></button>
-        <button class="icon-btn grid-btn" onclick={openGrid} aria-label="Preview on your Instagram grid" title="Preview on your Instagram grid"><Icon name="grid" /></button>
         <button
           class="btn accent bar-export"
           onclick={() => {
@@ -1742,6 +1732,7 @@
         bind:this={printEl}
         title={cropping ? undefined : "Press and hold to see the original"}
         onpointerdown={holdPhoto}
+        onpointermove={movePhoto}
         onpointerup={releasePhoto}
         onpointerleave={releasePhoto}
         onpointercancel={releasePhoto}
@@ -1914,14 +1905,22 @@
     <aside class="panel" class:open={trayOpen} class:closing={trayClosing} aria-label="{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]} settings">
       <div class="panel-head">
         <div>
-          <h2>{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
+          <h2>{compact && trayView === "photos" ? "Photos" : TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
           <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
         </div>
         <button class="btn accent done" onclick={() => glide(closeTray)}>Done</button>
       </div>
 
       <div class="body" id="tool-body">
-        {#if activeTab === "editor"}
+        {#if compact && trayView === "photos"}
+          <PhotosTray
+            bind:filesList
+            activeIndex={activeImageIndex}
+            onpick={(i) => glide(() => (setActiveImage(i), closeTray()))}
+            onremove={removeImage}
+            onadd={() => fileInput?.click()}
+          />
+        {:else if activeTab === "editor"}
           {@const tool = activeTool.editor}
           {#if histo}<Histogram bins={histo} />{/if}
           {#if !canDevelop}
@@ -2012,10 +2011,6 @@
 
   <!-- ─── Export sheet ──────────────────────────────────────────────────── -->
   <ExportSheet
-    onpreviewgrid={() => {
-      exportDialog.close();
-      openGrid();
-    }}
     bind:dialog={exportDialog}
     bind:exportOpen
     bind:exportPrefs
@@ -2039,7 +2034,6 @@
     {slices}
   />
 
-  <GridPreview bind:dialog={gridDialog} cells={gridCells} onmove={movePost} />
 
   {#if showSavePresetModal}
     <SaveDialog
@@ -2147,6 +2141,40 @@
   }
   .bar-side.end {
     justify-content: flex-end;
+  }
+  /* Phones: the current photo as a button that opens the Photos tray (desktop has the strip instead). */
+  .photos-btn {
+    display: none;
+    position: relative;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    border: 1.5px solid var(--line);
+  }
+  .photos-btn img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 8px;
+    display: block;
+  }
+  .photos-btn.on {
+    border-color: var(--accent);
+  }
+  .photos-btn .count {
+    position: absolute;
+    right: -6px;
+    bottom: -6px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #1a1204;
+    font-size: 0.68rem;
+    font-weight: 750;
+    line-height: 18px;
+    text-align: center;
   }
   .wordmark {
     display: flex;
@@ -2659,19 +2687,18 @@
       padding: 6px 8px;
     }
     .app:not(.empty) .wordmark,
-    .grid-btn,
     .meta,
-    .strip.single,
-    .strip-note,
+    .add-btn,
+    .strip,
     .tool-hint,
     .body > :global(.histo) {
       display: none;
     }
     .app:not(.empty) .bar {
-      grid-template-columns: auto 1fr;
+      grid-template-columns: auto 1fr auto;
     }
-    .app:not(.empty) .bar-side:first-child {
-      display: none;
+    .photos-btn {
+      display: block;
     }
     .modes button {
       min-width: 0;

@@ -13,7 +13,9 @@
   {#if autoAxis !== "v"}
     <Dial id="d-margin-v" label={autoAxis ? "Border" : "Top and bottom"} bind:value={frame.customMarginV} min={0} max={40} unit="%" reset={8} />
   {/if}
-  {#if autoAxis}
+  {#if frame.selectedRatioId === "carousel"}
+    <p class="hint">An even border around the whole strip. The photo is cropped to fill the slides inside it.</p>
+  {:else if autoAxis}
     <p class="hint">
       {autoAxis === "v" ? "Top and bottom fill" : "The sides fill"} in by themselves to keep the
       {RATIOS.find((r) => r.id === frame.selectedRatioId)?.label} shape. Choose Even border in Ratio to set every side yourself.

@@ -7,7 +7,6 @@
     dialog = $bindable(),
     exportOpen = $bindable(),
     exportPrefs = $bindable(),
-    onpreviewgrid,
     batchProgress,
     canShareFiles,
     downloadImage,
@@ -116,9 +115,6 @@
           </button>
         {/if}
       </div>
-      {#if filesList.length > 0}
-        <button class="btn ghost" onclick={onpreviewgrid}><Icon name="grid" />Preview on your Instagram grid</button>
-      {/if}
       {#if downloadStatus}<p class="status" role="status">{downloadStatus}</p>{/if}
       {#if fallbackDownloadUrl}
         <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>Download didn't start? Save {fallbackFilename}</a>

@@ -3,6 +3,18 @@
 import { freshDev } from "./developEngine.js";
 import { parseRecipe } from "./recipes.js";
 
+/**
+ * The frame's ratio, with the carousel worked out: n slides of 4:5 (or 1:1) side by side.
+ * @returns {{ id: string, label: string, w?: number, h?: number, slices?: number } | undefined}
+ */
+export function frameRatio(frame) {
+  const r = RATIOS.find((x) => x.id === frame.selectedRatioId);
+  if (r?.id !== "carousel") return r;
+  const n = Math.min(10, Math.max(2, Math.round(frame.slides) || 3));
+  const [w, h] = frame.slideShape === "1:1" ? [1, 1] : [4, 5];
+  return { ...r, w: w * n, h, slices: n };
+}
+
 // Caption x position (textPosX) that matches each alignment.
 export const ALIGN_X = { left: 0, center: 50, right: 100 };
 
@@ -61,7 +73,6 @@ export const ICONS = {
   export: "M12 3v12M7 10l5 5 5-5M5 21h14",
   add: "M12 5v14M5 12h14",
   upload: "M12 15V4M7 9l5-5 5 5M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4",
-  grid: "M4 4h4.5v4.5H4zM9.75 4h4.5v4.5h-4.5zM15.5 4H20v4.5h-4.5zM4 9.75h4.5v4.5H4zM9.75 9.75h4.5v4.5h-4.5zM15.5 9.75H20v4.5h-4.5zM4 15.5h4.5V20H4zM9.75 15.5h4.5V20h-4.5zM15.5 15.5H20V20h-4.5z",
 };
 
 export const EXIF_FIELDS = [
@@ -110,9 +121,8 @@ export const RATIOS = [
   { id: "custom", label: "Even border", w: null, h: null },
   { id: "3:2", label: "Print 3:2", w: 3, h: 2 },
   { id: "16:9", label: "Wide 16:9", w: 16, h: 9 },
-  // One wide frame cut into seamless 4:5 slides for an Instagram carousel.
-  { id: "carousel2", label: "Carousel × 2", w: 8, h: 5, slices: 2 },
-  { id: "carousel3", label: "Carousel × 3", w: 12, h: 5, slices: 3 },
+  // One wide frame cut into seamless slides for a swipeable Instagram carousel (see frameRatio).
+  { id: "carousel", label: "Carousel" },
 ];
 
 // Bundled fonts (see fonts.js) work offline; "system", "serif" and "mono" use what every device has.
