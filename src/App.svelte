@@ -46,6 +46,7 @@
     dragRect,
     turnedSize,
   } from "./lib/geometry.js";
+  import { zoomAt, clampPan, NO_ZOOM } from "./lib/zoom.js";
   import {
     getContrastingColor,
     applyExifOrientation,
@@ -125,6 +126,83 @@
     }, 200);
   }
   let trayView = $state("tool"); // phones: the tray shows the tool's settings, or "photos"
+
+  // Phones: pull the tray down to close it, by its head, or by its content when that is scrolled to the top
+  // (the same swipe that would scroll further up). Touch events, so we can stop the page from scrolling.
+  let panelEl = $state.raw(null);
+  let trayPull = $state(0); // px the finger has pulled the tray down
+  let trayPulling = $state(false);
+  $effect(() => {
+    if (!compact || !panelEl) return;
+    const el = panelEl;
+    let g = null;
+    const down = (e) => {
+      const body = el.querySelector(".body");
+      const t = e.touches[0];
+      g = e.touches.length === 1 && (!body?.contains(e.target) || body.scrollTop <= 0) ? { x: t.clientX, y: t.clientY, on: false } : null;
+    };
+    const move = (e) => {
+      if (!g) return;
+      const t = e.touches[0];
+      const dx = t.clientX - g.x;
+      const dy = t.clientY - g.y;
+      if (!g.on) {
+        if (dy > 10 && dy > 1.5 * Math.abs(dx)) g.on = trayPulling = true;
+        else if (Math.abs(dx) > 10 || dy < -10) g = null; // a sideways row, a slider or a scroll down: not ours
+        return;
+      }
+      e.preventDefault();
+      trayPull = Math.max(0, dy - 10);
+    };
+    const up = () => {
+      if (g?.on) {
+        trayPulling = false;
+        if (trayPull > 60) {
+          closeTray();
+          setTimeout(() => (trayPull = 0), 220); // slide on down from where the finger let go
+        } else trayPull = 0;
+      }
+      g = null;
+    };
+    el.addEventListener("touchstart", down, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", up);
+    el.addEventListener("touchcancel", up);
+    return () => {
+      el.removeEventListener("touchstart", down);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", up);
+      el.removeEventListener("touchcancel", up);
+    };
+  });
+
+  // Back (Android gesture or button, browser back) closes the open tray or dialog instead of leaving the
+  // app: each one adds a history entry while open. Closing it any other way takes that entry back out.
+  const backStack = [];
+  let ignorePops = 0;
+  function closeOnBack(close) {
+    const entry = { close };
+    backStack.push(entry);
+    history.pushState({ mfOverlay: true }, "");
+    return () => {
+      const i = backStack.indexOf(entry);
+      if (i < 0) return; // back already closed it
+      backStack.splice(i, 1);
+      ignorePops++;
+      history.back();
+    };
+  }
+  function onPopState() {
+    if (ignorePops > 0) return void ignorePops--;
+    const entry = backStack.pop();
+    if (entry && entry.close() === false) {
+      backStack.push(entry); // can't close right now (e.g. a batch export is running): stay
+      history.pushState({ mfOverlay: true }, "");
+    }
+  }
+  $effect(() => {
+    if (compact && trayOpen && !trayClosing) return closeOnBack(() => glide(closeTray));
+  });
   function pickTool(id) {
     glide(() => {
       if (trayOpen && !trayClosing && trayView === "tool" && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
@@ -213,35 +291,94 @@
   // A quick sideways swipe switches to the next or previous photo; moving cancels the hold.
   let holdTimer;
   let swipe = null;
+
+  // Zoom: pinch with two fingers, or double-tap (double-click) to zoom in and back. While zoomed, one
+  // finger pans instead of switching photos. Off while cropping or positioning a carousel.
+  let zoom = $state(NO_ZOOM);
+  const pointers = new Map(); // fingers on the photo: pointerId → { x, y }
+  let pinch = null; // two-finger gesture: where it started
+  let pan = null; // one finger dragging the zoomed photo
+  let lastTap = null; // for double-tap
+  // The photo's unzoomed centre and size, from its zoomed on-screen box (the zoom is around its centre).
+  function photoBox() {
+    const r = printEl.getBoundingClientRect();
+    return { cx: r.left + r.width / 2 - zoom.x, cy: r.top + r.height / 2 - zoom.y, w: r.width / zoom.s, h: r.height / zoom.s };
+  }
+  const rel = (b, x, y) => ({ x: x - b.cx, y: y - b.cy });
+  const setZoom = (z, b) => (zoom = z.s < 1.02 ? NO_ZOOM : clampPan(z, b.w, b.h));
+  $effect(() => {
+    // a new photo, cropping or carousel positioning starts back at fit
+    activeItem?.id, cropping, positioning;
+    zoom = NO_ZOOM;
+    pointers.clear();
+    pinch = pan = null;
+  });
+  function startPinch() {
+    clearTimeout(holdTimer);
+    showOriginal = false;
+    swipe = pan = lastTap = null;
+    const [a, b] = [...pointers.values()];
+    const box = photoBox();
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: zoom, mid: rel(box, (a.x + b.x) / 2, (a.y + b.y) / 2), box };
+  }
+
   function holdPhoto(e) {
     if (cropping || e.button > 0) return;
     e.currentTarget.setPointerCapture?.(e.pointerId); // keep getting the gesture if the finger leaves the photo
     if (positioning) return startFillDrag(e);
-    swipe = { x: e.clientX, y: e.clientY, t: performance.now() };
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) return startPinch();
+    if (pointers.size > 2) return;
+    const now = performance.now();
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+      lastTap = null;
+      const box = photoBox();
+      setZoom(zoom.s > 1 ? NO_ZOOM : zoomAt(NO_ZOOM, 2.5, rel(box, e.clientX, e.clientY)), box);
+      return;
+    }
+    if (zoom.s > 1) pan = { x: e.clientX, y: e.clientY, z: zoom, box: photoBox() };
+    swipe = { x: e.clientX, y: e.clientY, t: now };
     clearTimeout(holdTimer);
     holdTimer = setTimeout(() => (showOriginal = true), 120);
   }
   function movePhoto(e) {
     if (fillDrag) return dragFill(e);
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch) {
+      if (pointers.size < 2) return;
+      const [a, b] = [...pointers.values()];
+      const m = rel(pinch.box, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      const z = zoomAt(pinch.z, (pinch.z.s * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, pinch.mid);
+      return setZoom({ s: z.s, x: z.x + m.x - pinch.mid.x, y: z.y + m.y - pinch.mid.y }, pinch.box); // zoom and follow the fingers
+    }
     if (swipe && Math.hypot(e.clientX - swipe.x, e.clientY - swipe.y) > 12) {
       clearTimeout(holdTimer);
       showOriginal = false;
+      if (pan) setZoom({ s: pan.z.s, x: pan.z.x + e.clientX - pan.x, y: pan.z.y + e.clientY - pan.y }, pan.box);
     }
   }
   function releasePhoto(e) {
     fillDrag = null;
     clearTimeout(holdTimer);
     showOriginal = false;
+    pointers.delete(e?.pointerId);
+    if (pinch) {
+      if (pointers.size < 2) pinch = null; // the finger left behind doesn't start a pan or swipe
+      swipe = pan = null;
+      return;
+    }
     if (swipe && e?.type === "pointerup") {
       const dx = e.clientX - swipe.x;
       const dy = e.clientY - swipe.y;
-      const quick = performance.now() - swipe.t < 700;
-      if (quick && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+      const ms = performance.now() - swipe.t;
+      lastTap = ms < 250 && Math.hypot(dx, dy) < 10 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+      if (!pan && ms < 700 && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
         const next = activeImageIndex + (dx < 0 ? 1 : -1);
         if (next >= 0 && next < filesList.length) setActiveImage(next);
       }
     }
-    swipe = null;
+    swipe = pan = null;
   }
 
   // ─── Carousel position ─────────────────────────────────────────────────────
@@ -518,6 +655,9 @@
   const PRESETS_STORAGE_KEY = "mf_layout_presets_v1";
   let userPresets = $state([]);
   let showSavePresetModal = $state(false);
+  $effect(() => {
+    if (showSavePresetModal) return closeOnBack(() => (showSavePresetModal = false));
+  });
   let saveKind = $state("template"); // what the name dialog saves: "template" or "look"
   let newPresetName = $state("");
 
@@ -799,6 +939,9 @@
   // Estimated file size: encode the framed preview with the chosen settings and scale by pixel count.
   // shortcut: small previews compress a little worse than full-size photos, so this tends to overestimate.
   let exportOpen = $state(false);
+  $effect(() => {
+    if (exportOpen) return closeOnBack(() => !isBatchExporting && exportDialog?.close());
+  });
   let sizeEstimate = $state("");
   $effect(() => {
     if (!exportOpen || !processedImage || !activeItem) return;
@@ -1760,6 +1903,7 @@
 />
 
 <svelte:window
+  onpopstate={onPopState}
   onkeydown={onKeydown}
   onkeyup={onKeyup}
   onpointermove={moveCropDrag}
@@ -1815,7 +1959,8 @@
         class:positioning
         style:--ar={canvasAspect}
         bind:this={printEl}
-        title={cropping ? undefined : positioning ? "Drag to choose which part of the photo fills the slides" : "Press and hold to see the original"}
+        style:transform={zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
+        title={cropping ? undefined : positioning ? "Drag to choose which part of the photo fills the slides" : "Press and hold to see the original. Pinch or double-tap to zoom."}
         onpointerdown={holdPhoto}
         onpointermove={movePhoto}
         onpointerup={releasePhoto}
@@ -1913,6 +2058,10 @@
       </button>
     {/if}
 
+    {#if zoom.s > 1}
+      <button class="zoom-pill glass" onclick={() => (zoom = NO_ZOOM)} aria-label="Zoomed {zoom.s.toFixed(1)} times. Fit the photo">{zoom.s.toFixed(1)}× · Fit</button>
+    {/if}
+
     {#if !started || !activeItem}
       <Landing
         bare={started}
@@ -1989,7 +2138,13 @@
       {/each}
     </nav>
 
-    <aside class="panel" class:open={trayOpen} class:closing={trayClosing} aria-label="{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]} settings">
+    <aside
+      class="panel"
+      bind:this={panelEl}
+      style:transform={trayPull ? `translateY(${trayPull}px)` : undefined}
+      style:transition={trayPulling ? "none" : undefined}
+      class:open={trayOpen}
+      class:closing={trayClosing} aria-label="{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]} settings">
       <div class="panel-head">
         <div>
           <h2>{compact && trayView === "photos" ? "Photos" : TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
@@ -2338,6 +2493,20 @@
   .stage {
     grid-area: stage;
     min-height: 0;
+    overflow: clip; /* a zoomed photo stays inside its area */
+  }
+  .zoom-pill {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    z-index: 3;
+    transform: translateX(-50%);
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    font-size: 0.85rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
   }
   .fit {
     position: absolute;
@@ -2744,41 +2913,30 @@
   .third.h2 {
     top: 66.666%;
   }
+  /* Corner handles sit inside the crop box (the photo clips anything outside it, which hid half of each
+     round dot at the photo's edges): a 44px touch area with a white L bracket in the corner. */
   .handle {
     position: absolute;
-    width: 26px;
-    height: 26px;
-    margin: -13px;
+    width: 44px;
+    height: 44px;
     touch-action: none;
   }
   .handle::after {
     content: "";
     position: absolute;
-    inset: 8px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 4px rgb(0 0 0 / 0.5);
+    width: 22px;
+    height: 22px;
+    border: 0 solid #fff;
+    filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.7));
   }
-  .handle.nw {
-    left: 0;
-    top: 0;
-    cursor: nwse-resize;
-  }
-  .handle.ne {
-    right: 0;
-    top: 0;
-    cursor: nesw-resize;
-  }
-  .handle.sw {
-    left: 0;
-    bottom: 0;
-    cursor: nesw-resize;
-  }
-  .handle.se {
-    right: 0;
-    bottom: 0;
-    cursor: nwse-resize;
-  }
+  .handle.nw { left: 0; top: 0; cursor: nwse-resize; }
+  .handle.ne { right: 0; top: 0; cursor: nesw-resize; }
+  .handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+  .handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+  .handle.nw::after { left: 0; top: 0; border-width: 4px 0 0 4px; }
+  .handle.ne::after { right: 0; top: 0; border-width: 4px 4px 0 0; }
+  .handle.sw::after { left: 0; bottom: 0; border-width: 0 0 4px 4px; }
+  .handle.se::after { right: 0; bottom: 0; border-width: 0 4px 4px 0; }
 
   /* ── Compact: phones and portrait tablets (keep in step with COMPACT in the script) ──
      Same order as desktop, stacked: bar · photo · (photos) · settings tray · tool row. */
@@ -2859,6 +3017,17 @@
     .panel {
       border-left: 0;
       border-top: 1px solid var(--line);
+      transition: transform 200ms ease-out; /* springs back when a pull-down is let go too early */
+    }
+    /* Grab bar: says the tray can be pulled down. */
+    .panel::before {
+      content: "";
+      flex: none;
+      width: 36px;
+      height: 4px;
+      margin: 6px auto 0;
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--text) 22%, transparent);
     }
     .panel:not(.open) {
       display: none;

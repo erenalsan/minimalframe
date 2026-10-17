@@ -24,6 +24,34 @@
   );
   const canReset = $derived(reset !== undefined && value !== reset);
   let hintOpen = $state(false);
+
+  // Touch: double-tap the slider to reset it (dblclick only comes from a mouse). Two quick taps, not drags.
+  let tap = null;
+  let lastTap = 0;
+  function tapDown(e) {
+    tap = e.pointerType === "touch" ? { x: e.clientX, t: performance.now() } : null;
+  }
+  function tapUp(e) {
+    if (!tap || reset === undefined) return;
+    const now = performance.now();
+    const isTap = now - tap.t < 250 && Math.abs(e.clientX - tap.x) < 8;
+    if (isTap && now - lastTap < 350) {
+      value = reset;
+      lastTap = 0;
+    } else lastTap = isTap ? now : 0;
+  }
+
+  // Fine-tune: drag the number sideways, one step per 8px, for values a fingertip can't hit on the track.
+  let scrub = null;
+  function scrubStart(e) {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    scrub = { x: e.clientX, v: Number(value) };
+  }
+  function scrubMove(e) {
+    if (!scrub) return;
+    const v = scrub.v + Math.round((e.clientX - scrub.x) / 8) * step;
+    value = Number(Math.min(max, Math.max(min, v)).toFixed(decimals));
+  }
 </script>
 
 <div class="dial">
@@ -41,7 +69,15 @@
     {#if canReset}
       <button type="button" class="dial-reset" onclick={() => (value = reset)}>Reset</button>
     {/if}
-    <output for={id} class:changed={canReset}>{shown}<small>{unit}</small></output>
+    <output
+      for={id}
+      class:changed={canReset}
+      title="Drag sideways to fine-tune"
+      onpointerdown={scrubStart}
+      onpointermove={scrubMove}
+      onpointerup={() => (scrub = null)}
+      onpointercancel={() => (scrub = null)}
+    >{shown}<small>{unit}</small></output>
   </div>
   <input
     {id}
@@ -51,6 +87,8 @@
     {step}
     bind:value
     ondblclick={() => reset !== undefined && (value = reset)}
+    onpointerdown={tapDown}
+    onpointerup={tapUp}
     style:--lo="{Math.min(anchor, pos)}%"
     style:--hi="{Math.max(anchor, pos)}%"
     style:--track={track}
@@ -75,6 +113,12 @@
   }
   output {
     margin-left: auto;
+    padding: 6px 0 6px 12px; /* a bigger target to drag */
+    margin-block: -6px;
+    cursor: ew-resize;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
     font-weight: 650;
     font-size: 0.95rem;
     font-variant-numeric: tabular-nums;
