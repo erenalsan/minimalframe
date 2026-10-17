@@ -863,6 +863,8 @@
   );
 
   // ─── Loading photos ────────────────────────────────────────────────────────
+  let startPreset = null; // a frame picked on the landing page, applied to the photos it opens
+  let started = $state(false); // once a photo has opened, removing them all leaves an empty workbench, not the landing page
   async function loadFiles(fileList) {
     if (!fileList || fileList.length === 0) return;
     isLoading = true;
@@ -1037,6 +1039,7 @@
     if (newItems.length > 0) {
       const startIndex = filesList.length;
       filesList = [...filesList, ...newItems];
+      started = true;
       activeImageIndex = startIndex; // Switch to first newly added photo
 
       if (hasRaw) {
@@ -1045,6 +1048,8 @@
 
       await tick();
       resetTextPosition();
+      if (startPreset) applyPreset(startPreset);
+      startPreset = null;
       scheduleRender(true);
     }
 
@@ -1058,6 +1063,8 @@
     e.target.value = "";
   }
 
+  // Nothing on the page can be dragged (template previews, thumbnails, the logo): browsers would offer those
+  // as files, and dropping one would open it as a photo. Files dragged in from outside still work.
   // Drop anywhere: window-level listeners. dragenter/dragleave fire for every element crossed,
   // so a counter tells "still over the page" from "left the window".
   let dragDepth = 0;
@@ -1740,6 +1747,7 @@
   onpointermove={moveCropDrag}
   onpointerup={() => (cropDrag = null)}
   onblur={() => (showOriginal = false)}
+  ondragstart={(e) => e.preventDefault()}
   ondragenter={onDragEnter}
   ondragover={onDragOver}
   ondragleave={onDragLeave}
@@ -1748,7 +1756,7 @@
 
 <main
   class="app"
-  class:empty={filesList.length === 0}
+  class:empty={!started}
 >
   <header class="bar">
     <div class="bar-side">
@@ -1760,17 +1768,18 @@
         </button>
       {/if}
     </div>
-    {#if processedImage}
+    {#if started}
       <div class="seg modes" role="group" aria-label="Mode">
         <button aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>Edit</button>
         <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>Frame</button>
       </div>
       <div class="bar-side end">
         <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label="Add photos" title="Add photos"><Icon name="add" /></button>
-        <button class="icon-btn" onclick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
-        <button class="icon-btn" onclick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><Icon name="redo" /></button>
+        <button class="icon-btn" onclick={undo} disabled={!canUndo || !activeItem} aria-label="Undo" title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
+        <button class="icon-btn" onclick={redo} disabled={!canRedo || !activeItem} aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><Icon name="redo" /></button>
         <button
           class="btn accent bar-export"
+          disabled={!activeItem}
           onclick={() => {
             exportDialog?.showModal();
             exportOpen = true;
@@ -1886,13 +1895,15 @@
       </button>
     {/if}
 
-    {#if !processedImage}
+    {#if !started || !activeItem}
       <Landing
+        bare={started}
         {isLoading}
         {loadingStatus}
         {isDragging}
-        onchoose={() => fileInput?.click()}
-        onsample={loadSamplePhoto}
+        onchoose={() => { startPreset = null; fileInput?.click(); }}
+        onsample={() => { startPreset = null; loadSamplePhoto(); }}
+        onpick={(p) => { startPreset = p; fileInput?.click(); }}
       />
     {/if}
 
@@ -1909,7 +1920,7 @@
     {/if}
   </section>
 
-  {#if filesList.length > 0}
+  {#if started}
     <nav class="strip" class:single={filesList.length === 1} aria-label="Your photos">
       <ol>
         {#each filesList as item, i (item.id)}
@@ -1978,6 +1989,8 @@
             onremove={removeImage}
             onadd={() => fileInput?.click()}
           />
+        {:else if activeTab === "editor" && !activeItem}
+          <p class="tool-hint">Add a photo to edit it.</p>
         {:else if activeTab === "editor"}
           {@const tool = activeTool.editor}
           {#if histo}<Histogram bins={histo} />{/if}
@@ -2258,6 +2271,12 @@
     padding: 7px 16px;
     font-size: 0.9rem;
     font-weight: 650;
+  }
+  /* The main switch: the chosen mode is solid ink, so it reads at a glance on any screen. */
+  .modes button[aria-pressed="true"] {
+    background: var(--text);
+    color: var(--bg);
+    box-shadow: none;
   }
   .bar-export {
     margin-left: 8px;

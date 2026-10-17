@@ -1,229 +1,263 @@
 <script>
-  // First screen, before any photo is open: what the app does, and two ways to start.
-  import Icon from "./Icon.svelte";
+  // First screen, before any photo is open: a contact sheet of real prints from one photo.
+  // Tapping a print opens your photo in that frame; the empty print well opens it as it is.
+  import { BUILTIN_PRESETS } from "../lib/catalog.js";
 
-  let { isLoading, loadingStatus, isDragging, onchoose, onsample } = $props();
+  // bare: just the print well, standing in for the photo on the workbench once every photo has been removed.
+  import Icon from "./Icon.svelte";
+  let { bare = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick } = $props();
+
+  const preset = (id) => BUILTIN_PRESETS.find((p) => p.id === `preset_${id}`);
+  // Images in /landing are the app's own output (the sample photo, one look per print).
+  const PRINTS = [
+    { img: "brandbar", w: 560, h: 764, label: "Brand bar", alt: "Photo above a white bar with the camera logo and settings", preset: preset("brandbar") },
+    { img: "museum", w: 560, h: 700, label: "Museum mat", alt: "Photo in a wide cream mat", preset: preset("museum") },
+    { img: "filmborder", w: 560, h: 784, label: "Film border", alt: "Photo in a thin black film border", preset: preset("filmborder") },
+    { img: "spread", w: 560, h: 700, label: "Spread", alt: "Photo with its caption spread across the bottom", preset: preset("spread") },
+    { img: "instant", w: 560, h: 854, label: "Instant", alt: "Photo in an instant-film frame with a handwritten caption", preset: preset("polaroid") },
+    { img: "midnight", w: 560, h: 700, label: "Midnight", alt: "Photo on a near-black border", preset: preset("midnight") },
+    { img: "carousel", w: 864, h: 360, label: "Carousel · 3 slides", alt: "A wide photo split into three slides", wide: true,
+      preset: { selectedRatioId: "carousel", slides: 3, slideShape: "4:5" } },
+  ];
 </script>
 
-<div class="hero">
-  <div class="fan" aria-hidden="true">
-    <div class="sample s-instant">
-      <span class="sample-photo p-sunset"></span>
-      <span class="sample-cap" style:font-family="Caveat">Kyoto, spring</span>
-    </div>
-    <div class="sample s-film">
-      <span class="sample-photo p-sea"></span>
-      <span class="sample-cap" style:font-family='"Space Mono"'>X-T5  23mm  ƒ/2</span>
-    </div>
-    <div class="sample s-mat">
-      <span class="sample-photo p-forest"></span>
-      <span class="sample-cap" style:font-family='"Cormorant Garamond"'>Fujifilm X-T5</span>
-    </div>
+{#snippet well()}
+  <div class="well" class:over={isDragging}>
+    <span class="mark tl"></span><span class="mark tr"></span><span class="mark bl"></span><span class="mark br"></span>
+    {#if bare}<span class="plus" aria-hidden="true"><Icon name="add" /></span>{/if}
+    <p class="well-title">{isDragging ? "Drop to open" : "Drop photos here"}</p>
+    <button class="ink" onclick={onchoose} disabled={isLoading}>
+      {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || "Opening…"}{:else}Open photos{/if}
+    </button>
+    {#if !bare}<button class="link" onclick={onsample} disabled={isLoading}>or try the sample</button>{/if}
+    <p class="mono">JPEG · PNG · HEIC · RAW</p>
   </div>
-  <p class="eyebrow">For Instagram, VSCO and every feed</p>
-  <h1>Social-media-ready frames, with your EXIF <em>beautifully set.</em></h1>
-  <p class="lead">100% private: zero server uploads. Everything runs entirely in your browser.</p>
-  <ul class="badges" aria-label="Features">
-    <li>🔒 100% Private (Local Processing)</li>
-    <li>⚡ Instant Batch Export</li>
-    <li>📸 RAW &amp; EXIF Support</li>
-    <li>✨ Film Grain &amp; Bloom</li>
-  </ul>
-  <div class="dropzone" class:over={isDragging}>
-    <Icon name="upload" />
-    <p class="dz-title">{isDragging ? "Drop to open" : "Drag & drop one photo or a whole shoot"}</p>
-    <div class="dz-actions">
-      <button class="btn accent big" onclick={onchoose} disabled={isLoading}>
-        {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || "Opening…"}{:else}Choose photos{/if}
+{/snippet}
+
+{#if bare}
+  <div class="bare">{@render well()}</div>
+{:else}
+<div class="contact">
+  <section class="head">
+    <div class="intro">
+      <h1>Frame your photos for the feed.</h1>
+      <p class="lead">Borders, captions with your camera details, and carousels, plus film looks if you want to edit. Pick a frame below, or start with a plain photo.</p>
+      <p class="mono">Runs in your browser · works offline · nothing uploaded</p>
+    </div>
+
+    {@render well()}
+  </section>
+
+  <div class="rule mono"><span>One photo, seven frames</span><span>Tap a print to start with it</span></div>
+
+  <div class="grid">
+    {#each PRINTS as p, i (p.img)}
+      <button class="print" class:wide={p.wide} onclick={() => onpick(p.preset)} disabled={isLoading} aria-label="Start with {p.label}">
+        <span class="mono">{String(i + 1).padStart(2, "0")} {p.label}</span>
+        <img src="/landing/{p.img}.webp" width={p.w} height={p.h} alt={p.alt} loading="lazy" decoding="async" />
       </button>
-      <button class="btn ghost big" onclick={onsample} disabled={isLoading}>Try sample photo</button>
-    </div>
-    <p class="fine">JPEG, PNG, WebP and RAW from Sony, Canon, Nikon, Fujifilm and more.</p>
+    {/each}
   </div>
+
+  <footer class="mono">
+    <span>Brand logos &amp; EXIF captions</span>
+    <span>Film looks · LUTs · recipes</span>
+    <span>Batch export</span>
+    <span>Location removed on export</span>
+  </footer>
 </div>
+{/if}
 
 <style>
-  .hero {
+  .contact {
     position: absolute;
     inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: safe center;
-    gap: 16px;
-    padding: 24px 16px;
-    text-align: center;
     overflow: auto;
+    padding: 40px clamp(16px, 4vw, 48px) 56px;
+    background: var(--bg);
   }
-  .fan {
-    position: relative;
-    flex: none;
-    width: 360px;
-    max-width: 90vw;
-    height: 180px;
-    margin-bottom: 4px;
+  .contact > * {
+    max-width: 1180px;
+    margin-inline: auto;
   }
-  .sample {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    width: 124px;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 18px 36px -16px rgb(0 0 0 / 0.4);
-    transition: transform 300ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  .mono {
+    font-family: "Space Mono", ui-monospace, monospace;
+    font-size: 0.74rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
   }
-  .sample-photo {
-    display: block;
-    aspect-ratio: 1;
+
+  .head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 48px;
+    align-items: center;
+    padding-bottom: 40px;
   }
-  .sample-cap {
-    font-size: 0.8rem;
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
+  .intro {
+    display: grid;
+    gap: 18px;
   }
-  .s-instant {
-    background: #fbfaf6;
-    color: #222;
-    padding: 9px 9px 0;
-    transform: translateX(-140%) rotate(-9deg) translateY(16px);
-  }
-  .s-instant .sample-cap {
-    font-size: 1.05rem;
-    padding: 9px 0 12px;
-    text-align: center;
-  }
-  .s-film {
-    background: #000;
-    color: #ddd;
-    padding: 6px;
-    z-index: 1;
-    transform: translateX(-50%) translateY(-4px);
-  }
-  .s-film .sample-cap {
-    font-size: 0.62rem;
-    padding: 6px 0 2px;
-  }
-  .s-mat {
-    background: #f2efe8;
-    color: #333;
-    padding: 18px 18px 0;
-    transform: translateX(40%) rotate(8deg) translateY(20px);
-  }
-  .s-mat .sample-cap {
-    font-size: 0.85rem;
-    padding: 10px 0 14px;
-    text-align: center;
-  }
-  .fan:hover .s-instant { transform: translateX(-155%) rotate(-12deg) translateY(10px); }
-  .fan:hover .s-mat { transform: translateX(55%) rotate(11deg) translateY(14px); }
-  .p-sunset { background: linear-gradient(170deg, #ffb26b 0%, #ff7a7a 45%, #4a3a6b 100%); }
-  .p-sea { background: linear-gradient(180deg, #9fd3ff 0%, #4f8fc0 50%, #1d3d5c 100%); }
-  .p-forest { background: linear-gradient(160deg, #cfe8a0 0%, #5f9a5a 50%, #23402c 100%); }
-  .hero h1 em {
-    font-style: normal;
-    background: linear-gradient(90deg, var(--accent-ink), #f97316);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .hero h1 {
-    font-weight: 700;
-    font-size: clamp(1.9rem, 4vw, 2.8rem);
-    line-height: 1.1;
-    letter-spacing: -0.025em;
-    max-width: 20ch;
+  h1 {
+    font-weight: 750;
+    font-stretch: 118%;
+    font-size: clamp(2.2rem, 5vw, 4.2rem);
+    line-height: 0.98;
+    letter-spacing: -0.03em;
     text-wrap: balance;
   }
   .lead {
-    max-width: 44ch;
+    max-width: 46ch;
     font-size: 1.08rem;
-    line-height: 1.5;
+    line-height: 1.55;
     color: var(--muted);
     text-wrap: pretty;
   }
-  .fine {
-    max-width: 52ch;
-    font-size: 0.85rem;
-    color: var(--muted);
+
+  .bare {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    container-type: size;
+    padding: clamp(16px, 4vh, 40px);
   }
-  .eyebrow {
-    font-size: 0.78rem;
-    font-weight: 650;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--accent-ink);
+  /* Sized like a feed print, in the photo's place. */
+  .bare .well {
+    width: min(100cqw, 80cqh, 512px); /* the largest 4:5 that fits the stage */
+    aspect-ratio: 4 / 5;
+    min-height: 0;
+    border: 1.5px dashed color-mix(in srgb, var(--text) 25%, transparent);
   }
-  .badges {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
-    max-width: 640px;
-    padding: 0;
-    list-style: none;
+  .plus {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    margin-bottom: 4px;
+    border-radius: 50%;
+    background: var(--field);
+    color: var(--text);
   }
-  .badges li {
-    padding: 7px 13px;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    font-size: 0.85rem;
-    font-weight: 550;
-    white-space: nowrap;
+  .plus :global(svg) {
+    width: 34px;
+    height: 34px;
   }
-  .dropzone {
-    flex: none;
+
+  /* The empty print well: crop marks around a drop target. */
+  .well {
+    position: relative;
     display: grid;
     justify-items: center;
+    align-content: center;
     gap: 12px;
-    width: min(560px, 100%);
-    margin-top: 8px;
-    padding: 26px 20px 20px;
-    border: 1.5px dashed color-mix(in srgb, var(--text) 22%, transparent);
-    border-radius: var(--radius);
+    min-height: 300px;
+    padding: 32px 24px;
     background: var(--surface);
-    box-shadow: var(--shadow);
-    transition: border-color 150ms, background 150ms, transform 150ms;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    text-align: center;
+    transition: border-color 150ms, transform 150ms;
   }
-  .dropzone.over {
-    border-color: var(--accent-ink);
-    background: color-mix(in srgb, var(--text) 8%, transparent);
+  .well.over {
+    border-color: var(--text);
     transform: scale(1.01);
   }
-  .dropzone > :global(svg) {
-    width: 30px;
-    height: 30px;
-    color: var(--accent-ink);
+  .mark {
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border: 0 solid var(--muted);
   }
-  .dz-title {
+  .tl { top: 14px; left: 14px; border-top-width: 1.5px; border-left-width: 1.5px; }
+  .tr { top: 14px; right: 14px; border-top-width: 1.5px; border-right-width: 1.5px; }
+  .bl { bottom: 14px; left: 14px; border-bottom-width: 1.5px; border-left-width: 1.5px; }
+  .br { bottom: 14px; right: 14px; border-bottom-width: 1.5px; border-right-width: 1.5px; }
+  .well-title {
     font-weight: 600;
+    font-size: 1.05rem;
   }
-  .dz-actions {
+  .ink {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 0 26px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--text);
+    color: var(--bg);
+    font: inherit;
+    font-weight: 650;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  .link {
+    min-height: 40px;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .ink:disabled, .link:disabled, .print:disabled { opacity: 0.6; cursor: default; }
+
+  .rule {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 0 28px;
+    border-top: 1px solid var(--text);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 36px 28px;
+    align-items: start;
+  }
+  .print {
+    display: grid;
+    gap: 10px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .wide { grid-column: span 2; }
+  .print img {
+    width: 100%;
+    height: auto;
+    display: block;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.16), 0 10px 24px -8px rgb(0 0 0 / 0.22);
+    transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .print:hover:not(:disabled) img { transform: translateY(-4px); }
+  .print:hover .mono, .print:focus-visible .mono { color: var(--text); }
+
+  footer {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px;
+    gap: 12px 40px;
+    margin-top: 64px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
   }
-  /* Keep the dropzone above the fold: shrink the fan on short screens, drop it on phones. */
+
+  @media (max-width: 899px) {
+    .head { grid-template-columns: 1fr; gap: 28px; padding-bottom: 32px; }
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 16px; }
+  }
   @media (max-width: 600px) {
-    .fan {
-      display: none;
-    }
-    .hero {
-      gap: 12px;
-    }
-    .badges li {
-      padding: 5px 10px;
-      font-size: 0.76rem;
-    }
-    .dropzone {
-      padding: 18px 14px 14px;
-    }
-    .dropzone .btn.big {
-      padding: 12px 20px;
-      font-size: 0.98rem;
-    }
+    .contact { padding-top: 20px; }
+    .well { min-height: 0; padding: 28px 16px; }
+    .rule span:last-child { display: none; }
+    .print .mono { font-size: 0.66rem; }
   }
 </style>

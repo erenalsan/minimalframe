@@ -54,6 +54,8 @@ body {
 }
 
 button { cursor: pointer; background: none; border: none; font: inherit; color: inherit; }
+/* Images aren't draggable (see ondragstart in App.svelte); this covers browsers that start the drag anyway. */
+img { -webkit-user-drag: none; user-drag: none; }
 input, select { font: inherit; color: inherit; }
 
 :focus-visible {
