@@ -18,6 +18,8 @@
     isBatchExporting,
     isDownloading,
     pendingShare,
+    saveQueue, // Samsung Internet: images still waiting for a tap each
+    saveNext,
     processedImage,
     selectedCount,
     shareFiles,
@@ -96,6 +98,9 @@
       </p>
 
       <div class="actions">
+        {#if saveQueue}
+          <button class="btn accent big" onclick={saveNext}><Icon name="export" />Save image {saveQueue.next + 1} of {saveQueue.files.length}</button>
+        {/if}
         <!-- svelte-ignore a11y_autofocus -->
         {#if canShareFiles}
           {#if pendingShare}

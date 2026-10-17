@@ -1129,6 +1129,7 @@
       }
     }
     filesList = filesList.filter((_, idx) => idx !== index);
+    if (filesList.length === 0) closeTray(); // nothing left to show in the photos tray or a tool
     if (activeImageIndex >= filesList.length) {
       activeImageIndex = Math.max(0, filesList.length - 1);
     }
@@ -1614,9 +1615,26 @@
   // Phones and tablets save every photo/slide as its own image (it lands in the gallery straight away);
   // desktop gets one ZIP, which is tidier in a downloads folder.
   const savesSeparately = matchMedia("(pointer: coarse)").matches;
+  // Samsung Internet keeps only the first of several downloads started without a tap, so there the rest
+  // wait for one tap each (Save image 2 of 3…). Chrome and others save them all at once.
+  // shortcut: detects Samsung Internet by name; add other browsers here if they turn out to block too.
+  const oneSavePerTap = typeof navigator !== "undefined" && /SamsungBrowser/.test(navigator.userAgent);
+  let saveQueue = $state.raw(null); // { files, next }: images still waiting for a tap
+  function saveNext() {
+    const { files, next } = saveQueue;
+    triggerDownload(files[next].blob, files[next].name);
+    saveQueue = next + 1 < files.length ? { files, next: next + 1 } : null;
+    flashStatus(saveQueue ? `Saved ${next + 1} of ${files.length}. Tap Save for the next one.` : `Saved all ${files.length} images`);
+  }
+
   async function saveFiles(files, zipName) {
+    saveQueue = null;
     if (files.length === 1) return triggerDownload(files[0].blob, files[0].name);
     if (!savesSeparately) return triggerDownload(await zipFiles(files), zipName);
+    if (oneSavePerTap) {
+      saveQueue = { files, next: 0 };
+      return saveNext();
+    }
     for (const f of files) {
       const url = URL.createObjectURL(f.blob);
       const link = Object.assign(document.createElement("a"), { href: url, download: f.name });
@@ -1642,7 +1660,7 @@
       const files = await renderFiles(activeItem, mode);
       const name = `${cleanName(activeItem.name, "photo")}_carousel.zip`;
       await saveFiles(files, name);
-      flashStatus(
+      if (!saveQueue) flashStatus(
         files.length === 1 ? `Saved ${files[0].name}` : savesSeparately ? `Saved ${files.length} slides` : `Saved ${files.length} slides to ${name}`,
       );
     } catch (err) {
@@ -1719,7 +1737,7 @@
       batchProgress.filename = savesSeparately ? "Saving…" : "Packing the ZIP…";
       const name = `MinimalFrame_${new Date().toISOString().slice(0, 10)}_${total}photos.zip`;
       await saveFiles(files, name);
-      flashStatus(savesSeparately ? `Saved ${files.length} images` : `Saved ${total} photos to ${name}`);
+      if (!saveQueue) flashStatus(savesSeparately ? `Saved ${files.length} images` : `Saved ${total} photos to ${name}`);
     } catch (err) {
       console.error("[MinimalFrame] Batch export error:", err);
       loadError = `Batch export failed: ${err.message}`;
@@ -2096,6 +2114,8 @@
     {isBatchExporting}
     {isDownloading}
     {pendingShare}
+    {saveQueue}
+    {saveNext}
     {processedImage}
     {selectedCount}
     {shareFiles}
