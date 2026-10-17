@@ -123,7 +123,7 @@
   .p-forest { background: linear-gradient(160deg, #cfe8a0 0%, #5f9a5a 50%, #23402c 100%); }
   .hero h1 em {
     font-style: normal;
-    background: linear-gradient(90deg, var(--accent-ink), hsl(calc(var(--hue) - 30) 80% 60%));
+    background: linear-gradient(90deg, var(--accent-ink), #f97316);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;

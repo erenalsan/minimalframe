@@ -1,20 +1,22 @@
 /*
  * app.css — MinimalFrame global tokens + reset. Component styles live in the .svelte files.
  *
- * Concept: flat and quiet, so the photo is the only colourful thing on screen.
- * Light or dark follows the device setting; the accent is taken from the photo's hue (see App.svelte).
+ * Darkroom: neutral greys so the photo is the only colour on screen (a tinted surround skews how you
+ * judge colour), and one amber accent for the main action and whatever is selected.
+ * Light or dark follows the device setting.
  */
 :root {
-  --bg: #f4f4f2;
-  --stage: #e9e8e5; /* behind the photo */
-  --surface: #ffffff; /* bar, panel, strip, dialogs */
-  --line: rgb(0 0 0 / 0.1);
-  --field: rgb(0 0 0 / 0.045); /* inputs and segmented controls */
-  --text: #17171a;
-  --muted: rgb(23 23 26 / 0.62);
-  --accent: #e0a040; /* fallback; App.svelte derives it from the photo */
+  --bg: #f2f2f1;
+  --stage: #e6e6e4; /* behind the photo: neutral mid-light grey */
+  --surface: #fbfbfa; /* bar, tool rail, settings panel, dialogs */
+  --line: rgb(0 0 0 / 0.09);
+  --field: rgb(0 0 0 / 0.05); /* inputs, segmented controls, selected rows */
+  --text: #18181a;
+  --muted: rgb(24 24 26 / 0.6);
+  --accent: #f59e0b; /* fills: Export, selection marks */
+  --accent-strong: #fbbf24;
+  --accent-ink: #b45309; /* amber that reads as text on a light background */
   --radius: 14px;
-  /* older names, still used by component styles */
   --glass: var(--surface);
   --glass-strong: var(--surface);
   --glass-line: var(--line);
@@ -22,13 +24,14 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #111113;
-    --stage: #0b0b0c;
-    --surface: #18181b;
-    --line: rgb(255 255 255 / 0.09);
-    --field: rgb(255 255 255 / 0.05);
-    --text: #f2f2f0;
-    --muted: rgb(242 242 240 / 0.6);
+    --bg: #111112;
+    --stage: #0c0c0d;
+    --surface: #161617;
+    --line: rgb(255 255 255 / 0.08);
+    --field: rgb(255 255 255 / 0.06);
+    --text: #f1f1ef;
+    --muted: rgb(241 241 239 / 0.56);
+    --accent-ink: #fbbf24;
   }
 }
 

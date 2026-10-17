@@ -74,7 +74,7 @@
   .template-photo {
     flex: 1;
     min-height: 30%;
-    background: linear-gradient(160deg, hsl(var(--hue) 60% 70%), hsl(calc(var(--hue) + 40) 40% 30%));
+    background: linear-gradient(160deg, #f6c177, #5b4a7a);
   }
   .template-cap {
     font-size: 0.6rem;

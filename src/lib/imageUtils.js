@@ -117,27 +117,6 @@ export async function decodeUpright(blob) {
   }
 }
 
-// Dominant hue (saturation-weighted circular mean) tints the UI to match the photo; null when near-grey.
-export function dominantHue(source) {
-  const c = document.createElement("canvas");
-  c.width = c.height = 48;
-  const x = c.getContext("2d", { willReadFrequently: true });
-  x.drawImage(source, 0, 0, 48, 48);
-  const d = x.getImageData(0, 0, 48, 48).data;
-  let sx = 0, sy = 0, total = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b), chroma = max - min;
-    if (chroma < 0.08) continue;
-    const h = max === r ? ((g - b) / chroma + 6) % 6 : max === g ? (b - r) / chroma + 2 : (r - g) / chroma + 4;
-    const w = chroma * max;
-    sx += Math.cos((h * Math.PI) / 3) * w;
-    sy += Math.sin((h * Math.PI) / 3) * w;
-    total += w;
-  }
-  if (total < 48 * 48 * 0.02) return null;
-  return Math.round(((Math.atan2(sy, sx) * 180) / Math.PI + 360) % 360);
-}
 
 // Border colour suggestions from the photo itself.
 export function photoPalette(source) {

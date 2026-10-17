@@ -50,7 +50,6 @@
     applyExifOrientation,
     createProxyPreview,
     decodeUpright,
-    dominantHue,
     photoPalette,
     createThumbnail,
     fmtExposure,
@@ -105,13 +104,32 @@
   let compact = $state(compactQuery.matches);
   compactQuery.addEventListener("change", (e) => (compact = e.matches));
   let trayOpen = $state(false); // compact only; the desktop panel is always open
+  // The tray opens straight away (its CSS slides it up); closing first plays the slide-down, so the
+  // close lands 200ms later. Any tap in between cancels the close, so taps always win and in order.
+  let trayClosing = $state(false);
+  let closeTimer;
+  function openTray() {
+    clearTimeout(closeTimer);
+    trayClosing = false;
+    trayOpen = true;
+  }
+  function closeTray() {
+    if (!trayOpen || trayClosing) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return void (trayOpen = false);
+    trayClosing = true;
+    closeTimer = setTimeout(() => {
+      trayOpen = false;
+      trayClosing = false;
+    }, 200);
+  }
   function pickTool(id) {
-    trayOpen = !(trayOpen && activeTool[activeTab] === id); // tapping the open tool again closes it
+    if (trayOpen && !trayClosing && activeTool[activeTab] === id) return closeTray(); // tapping the open tool again
     activeTool[activeTab] = id;
+    openTray();
   }
   function setMode(tab) {
     activeTab = tab;
-    trayOpen = false;
+    closeTray();
   }
   const toolOpen = (id) => activeTool[activeTab] === id && (!compact || trayOpen);
   let exportDialog = $state.raw(null);
@@ -121,7 +139,7 @@
 
   // ─── Photos ────────────────────────────────────────────────────────────────
   // Each item: { id, file, name, sourceBlob, fullW, fullH, previewImage, linearRaw, small, thumbUrl, isRaw, rawBadge,
-  //   orientationTag, hue, palette, rotated, selected, hadGps, dev, crop, exifOverride } (see loadFiles)
+  //   orientationTag, palette, rotated, selected, hadGps, dev, crop, exifOverride } (see loadFiles)
   let filesList = $state([]);
   let activeImageIndex = $state(0);
   let isLoading = $state(false);
@@ -884,7 +902,6 @@
 
         // 5. Filmstrip Thumbnail (120px)
         const thumbUrl = createThumbnail(thumbSource);
-        const hue = dominantHue(thumbSource);
         const palette = photoPalette(thumbSource);
 
         // 6. Initial Editable EXIF Override values
@@ -925,7 +942,6 @@
           isRaw,
           rawBadge,
           orientationTag,
-          hue,
           palette,
           rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
           selected: true, // included in batch export
@@ -974,8 +990,19 @@
     e.target.value = "";
   }
 
+  // Drop anywhere: window-level listeners. dragenter/dragleave fire for every element crossed,
+  // so a counter tells "still over the page" from "left the window".
+  let dragDepth = 0;
+  const hasFiles = (e) => e.dataTransfer?.types?.includes("Files");
+  function onDragEnter(e) {
+    if (!hasFiles(e)) return;
+    dragDepth++;
+    isDragging = true;
+  }
   function onDrop(e) {
+    if (!hasFiles(e)) return;
     e.preventDefault();
+    dragDepth = 0;
     isDragging = false;
     const files = Array.from(e.dataTransfer?.files || []);
     if (files.length > 0) loadFiles(files);
@@ -1005,11 +1032,13 @@
   }
 
   function onDragOver(e) {
-    e.preventDefault();
-    isDragging = true;
+    if (hasFiles(e)) e.preventDefault(); // allows the drop
   }
-  function onDragLeave() {
-    isDragging = false;
+  function onDragLeave(e) {
+    if (hasFiles(e) && --dragDepth <= 0) {
+      dragDepth = 0;
+      isDragging = false;
+    }
   }
 
   function removeImage(index, e) {
@@ -1562,72 +1591,38 @@
   onpointermove={moveCropDrag}
   onpointerup={() => (cropDrag = null)}
   onblur={() => (showOriginal = false)}
+  ondragenter={onDragEnter}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
 />
 
 <main
   class="app"
   class:empty={filesList.length === 0}
-  class:dragging={isDragging}
-  style:--hue={activeItem?.hue ?? 38}
-  ondrop={onDrop}
-  ondragover={onDragOver}
-  ondragleave={onDragLeave}
 >
-  <header class="bar glass">
-    <span class="wordmark"
-      ><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text"
-        >MinimalFrame</span
-      ></span
-    >
-    {#if activeItem}
-      <p class="meta">
-        <span class="meta-name">{activeItem.name}</span>
-        {#if framedSize.w}<span class="meta-dim"
-            >{activeTab === "framing" ? framedSize.w : photoSize.w} × {activeTab ===
-            "framing"
-              ? framedSize.h
-              : photoSize.h}</span
-          >{/if}
-        {#if activeItem.rawBadge}<span class="pill">RAW</span>{/if}
-      </p>
-    {/if}
+  <header class="bar">
+    <div class="bar-side">
+      <span class="wordmark"><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text">MinimalFrame</span></span>
+    </div>
     {#if processedImage}
-      <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label="Add photos" title="Add photos"><Icon name="add" /></button>
-      <div class="seg modes modes-top" role="group" aria-label="Mode">
+      <div class="seg modes" role="group" aria-label="Mode">
         <button aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>Edit</button>
         <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>Frame</button>
       </div>
-      <div class="bar-tools">
+      <div class="bar-side end">
+        <button class="icon-btn" onclick={() => fileInput?.click()} aria-label="Add photos" title="Add photos"><Icon name="add" /></button>
+        <button class="icon-btn" onclick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
+        <button class="icon-btn" onclick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><Icon name="redo" /></button>
+        <button class="icon-btn grid-btn" onclick={openGrid} aria-label="Preview on your Instagram grid" title="Preview on your Instagram grid"><Icon name="grid" /></button>
         <button
-          class="icon-btn"
-          onclick={undo}
-          disabled={!canUndo}
-          aria-label="Undo"
-          title="Undo (Ctrl+Z)"><Icon name="undo" /></button
-        >
-        <button
-          class="icon-btn"
-          onclick={redo}
-          disabled={!canRedo}
-          aria-label="Redo"
-          title="Redo (Ctrl+Shift+Z)"><Icon name="redo" /></button
-        >
-        <button
-          class="icon-btn grid-btn"
-          onclick={openGrid}
-          aria-label="Preview on your Instagram grid"
-          title="Preview on your Instagram grid"><Icon name="grid" /></button
+          class="btn accent bar-export"
+          onclick={() => {
+            exportDialog?.showModal();
+            exportOpen = true;
+          }}><Icon name="export" />Export</button
         >
       </div>
-      <button
-        class="btn accent bar-export"
-        onclick={() => {
-          exportDialog?.showModal();
-          exportOpen = true;
-        }}
-      >
-        <Icon name="export" />Export
-      </button>
     {/if}
   </header>
 
@@ -1698,6 +1693,13 @@
       </div>
     </div>
 
+    {#if activeItem && processedImage}
+      <p class="meta">
+        <span class="meta-name">{activeItem.name}</span>
+        {#if framedSize.w}<span class="meta-dim">{activeTab === "framing" ? framedSize.w : photoSize.w} × {activeTab === "framing" ? framedSize.h : photoSize.h}</span>{/if}
+        {#if activeItem.rawBadge}<span class="pill">RAW</span>{/if}
+      </p>
+    {/if}
     {#if processedImage}
       <button
         class="hold"
@@ -1740,7 +1742,7 @@
   </section>
 
   {#if filesList.length > 0}
-    <nav class="strip glass" class:single={filesList.length === 1} aria-label="Your photos">
+    <nav class="strip" class:single={filesList.length === 1} aria-label="Your photos">
       <ol>
         {#each filesList as item, i (item.id)}
           <li class="frame" class:active={activeImageIndex === i}>
@@ -1777,37 +1779,29 @@
         </p>{/if}
     </nav>
 
-    <aside class="panel glass" class:open={trayOpen} aria-label="Controls">
-      <div class="seg modes" role="group" aria-label="Mode">
-        <button aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>Edit</button>
-        <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>Frame</button>
-      </div>
+    <nav class="rail" aria-label="Tools">
+      {#each TOOLS[activeTab] as [id, name] (id)}
+        <button
+          class="tab"
+          title={TOOL_HINTS[id]}
+          aria-pressed={toolOpen(id)}
+          onclick={() => pickTool(id)}
+        >
+          <Icon name={id} /><span>{name}</span>
+        </button>
+      {/each}
+    </nav>
 
-      <div class="tray-head">
-        <h2>{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
-        <button class="btn accent done" onclick={() => (trayOpen = false)}>Done</button>
-      </div>
-
-      <div
-        class="tabs"
-        class:many={TOOLS[activeTab].length > 4}
-        role="group"
-        aria-label="Tools"
-      >
-        {#each TOOLS[activeTab] as [id, name] (id)}
-          <button
-            class="tab"
-            title={TOOL_HINTS[id]}
-            aria-pressed={toolOpen(id)}
-            onclick={() => pickTool(id)}
-          >
-            <Icon name={id} /><span>{name}</span>
-          </button>
-        {/each}
+    <aside class="panel" class:open={trayOpen} class:closing={trayClosing} aria-label="{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]} settings">
+      <div class="panel-head">
+        <div>
+          <h2>{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
+          <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
+        </div>
+        <button class="btn accent done" onclick={closeTray}>Done</button>
       </div>
 
       <div class="body" id="tool-body">
-        <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
         {#if activeTab === "editor"}
           {@const tool = activeTool.editor}
           {#if histo}<Histogram bins={histo} />{/if}
@@ -1936,98 +1930,111 @@
       onclose={() => (showSavePresetModal = false)}
     />
   {/if}
+
+  {#if isDragging}
+    <div class="drop-overlay" aria-hidden="true">
+      <p>Drop anywhere to upload a <em>shoot</em></p>
+    </div>
+  {/if}
 </main>
 
 <style>
-  /* ── Shell ─────────────────────────────────────────────────────────────── */
+  /* ── Shell ───────────────────────────────────────────────────────────────
+     Darkroom: a neutral workspace (it doesn't tint how you judge colour), one amber accent, flat
+     surfaces split by hairlines. Desktop reads left to right: tools · photo · settings of that tool. */
   .app {
-    /* The accent follows the photo's dominant hue (set inline as --hue). */
-    --accent: hsl(var(--hue) 88% 72%);
-    --accent-strong: hsl(var(--hue) 90% 80%);
-    --accent-ink: var(--accent);
-    --bg: hsl(var(--hue) 14% 8%);
-    --stage: hsl(var(--hue) 16% 6%);
-    --surface: hsl(var(--hue) 10% 11%);
-    --glass: var(--surface);
-    --glass-line: hsl(var(--hue) 30% 80% / 0.1);
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -16px rgb(0 0 0 / 0.6);
     position: relative;
     height: 100dvh;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 384px;
+    grid-template-columns: 88px minmax(0, 1fr) 340px;
     grid-template-rows: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "bar bar"
-      "stage panel"
-      "strip panel";
-    gap: 10px;
-    padding: 10px;
-    padding-top: max(10px, env(safe-area-inset-top));
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
-    background: radial-gradient(
-        70% 60% at 40% 45%,
-        color-mix(in srgb, var(--accent) 13%, transparent),
-        transparent 70%
-      ),
-      var(--stage);
-  }
-  @media (prefers-color-scheme: light) {
-    .app {
-      --accent: hsl(var(--hue) 80% 66%);
-      --accent-strong: hsl(var(--hue) 80% 72%);
-      --accent-ink: hsl(var(--hue) 70% 34%);
-      --bg: hsl(var(--hue) 30% 96%);
-      --stage: hsl(var(--hue) 24% 92%);
-      --surface: hsl(var(--hue) 45% 99.5%);
-      --glass-line: hsl(var(--hue) 25% 25% / 0.1);
-      --shadow: 0 1px 2px hsl(var(--hue) 30% 20% / 0.06),
-        0 12px 32px -18px hsl(var(--hue) 30% 20% / 0.25);
-    }
+      "bar bar bar"
+      "rail stage panel"
+      "rail strip panel";
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--stage);
   }
   .app.empty {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "bar" "stage";
-    background: radial-gradient(
-        50% 45% at 50% 30%,
-        color-mix(in srgb, var(--accent) 16%, transparent),
-        transparent 70%
-      ),
-      var(--bg);
+    background: var(--bg);
   }
-  .app > :is(.bar, .stage, .strip, .panel) {
+  .app > :is(.bar, .stage, .strip, .rail, .panel) {
     position: relative;
     z-index: 1;
   }
-  .app.dragging .stage {
-    outline: 2px dashed var(--accent-ink);
-    outline-offset: -10px;
-    border-radius: var(--radius);
+  .app > :is(.bar, .rail, .panel, .strip) {
+    background: var(--surface);
   }
-  .app > :is(.bar, .panel, .strip) {
-    box-shadow: var(--shadow);
+  /* Full-screen drop target; pointer-events: none so the drop still reaches the window listener. */
+  .drop-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    pointer-events: none;
+    background: rgb(0 0 0 / 0.35);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    outline: 2px dashed #f59e0b;
+    outline-offset: -14px;
+    animation: drop-in 180ms ease-out;
+  }
+  .drop-overlay p {
+    max-width: 18ch;
+    text-align: center;
+    font-size: clamp(1.6rem, 6vw, 2.6rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: #fff;
+  }
+  .drop-overlay em {
+    font-style: normal;
+    color: #f59e0b;
+  }
+  @keyframes drop-in {
+    from {
+      opacity: 0;
+    }
   }
 
-  /* ── Glass ─────────────────────────────────────────────────────────────── */
-
-  /* ── Top bar ───────────────────────────────────────────────────────────── */
+  /* ── Top bar: name · Edit|Frame · actions ─────────────────────────────── */
   .bar {
     grid-area: bar;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    padding: 6px 12px 6px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .app.empty .bar {
+    background: transparent;
+    border-bottom-color: transparent;
+  }
+  .bar-side {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 8px 8px 8px 20px;
-    min-height: 56px;
-    border-radius: 999px;
+    gap: 2px;
+    min-width: 0;
+  }
+  .bar-side.end {
+    justify-content: flex-end;
   }
   .wordmark {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex: none;
+    gap: 9px;
     font-stretch: 112%;
     font-weight: 750;
-    font-size: 1.05rem;
+    font-size: 1.02rem;
     letter-spacing: -0.02em;
     white-space: nowrap;
   }
@@ -2036,44 +2043,47 @@
     height: 24px;
     display: block;
   }
+  .modes button {
+    min-width: 76px;
+    padding: 7px 16px;
+    font-size: 0.9rem;
+    font-weight: 650;
+  }
+  .bar-export {
+    margin-left: 8px;
+    padding: 9px 16px;
+  }
+  /* File name and size, as a caption under the photo. */
   .meta {
+    position: absolute;
+    left: 16px;
+    bottom: 18px;
+    z-index: 2;
     display: flex;
     align-items: center;
     gap: 10px;
-    min-width: 0;
-    margin: 0 auto;
-    font-size: 0.87rem;
+    max-width: calc(50% - 110px);
+    font-size: 0.8rem;
     color: var(--muted);
   }
   .meta-name {
-    color: var(--text);
-    font-weight: 550;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 28ch;
   }
   .meta-dim {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
   .pill {
-    padding: 2px 8px;
+    padding: 1px 7px;
     border-radius: 999px;
-    border: 1px solid var(--glass-line);
-    font-size: 0.72rem;
+    border: 1px solid var(--line);
+    font-size: 0.68rem;
     font-weight: 650;
     letter-spacing: 0.04em;
     color: var(--accent-ink);
   }
-  .bar-export {
-    margin-left: auto;
-  }
-  .meta + .bar-export {
-    margin-left: 0;
-  }
-
-  /* ── Buttons ───────────────────────────────────────────────────────────── */
 
   /* ── Stage ─────────────────────────────────────────────────────────────── */
   .stage {
@@ -2094,8 +2104,16 @@
     border-radius: 3px;
     overflow: hidden;
     box-shadow:
-      0 2px 4px rgb(0 0 0 / 0.25),
-      0 40px 80px -30px rgb(0 0 0 / 0.75);
+      0 35px 120px -20px rgb(0 0 0 / 0.9),
+      0 10px 40px -15px rgb(0 0 0 / 0.7);
+  }
+  @media (prefers-color-scheme: light) {
+    /* the same lift, softened so it doesn't look like a smudge on the light background */
+    .print {
+      box-shadow:
+        0 35px 120px -20px rgb(0 0 0 / 0.45),
+        0 10px 40px -15px rgb(0 0 0 / 0.35);
+    }
   }
   canvas {
     display: block;
@@ -2162,10 +2180,9 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 10px 14px;
+    padding: 6px 14px;
     min-width: 0;
-    justify-self: start;
-    max-width: 100%;
+    border-top: 1px solid var(--line);
   }
   .strip ol {
     display: flex;
@@ -2247,26 +2264,118 @@
     border-color: var(--text);
   }
 
-  /* ── Control panel ─────────────────────────────────────────────────────── */
+  /* ── Tool rail ───────────────────────────────────────────────────────── */
+  .rail {
+    grid-area: rail;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 8px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    border-right: 1px solid var(--line);
+  }
+  .tab {
+    position: relative;
+    flex: none;
+    display: grid;
+    justify-items: center;
+    gap: 5px;
+    padding: 10px 4px 9px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 550;
+    color: var(--muted);
+    transition:
+      background 150ms,
+      color 150ms;
+  }
+  .tab :global(svg) {
+    width: 22px;
+    height: 22px;
+  }
+  .tab:hover {
+    color: var(--text);
+    background: var(--field);
+  }
+  .tab[aria-pressed="true"] {
+    color: var(--text);
+    background: var(--field);
+  }
+  /* the selected tool: an amber mark on the edge facing the photo */
+  .tab[aria-pressed="true"]::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 12px;
+    bottom: 12px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  .tab[aria-pressed="true"] :global(svg) {
+    color: var(--accent-ink);
+  }
+
+  /* ── Settings panel (the selected tool's controls) ─────────────────────── */
   .panel {
     grid-area: panel;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    border-left: 1px solid var(--line);
     /* clip, not hidden: a hidden container can still be scrolled by focus (e.g. the visually hidden
-       .cube file input), which pushed the tabs out of view with no way to scroll back. */
+       .cube file input), which pushed the panel's head out of view with no way to scroll back. */
     overflow: clip;
   }
-  .bar .add-btn,
-  .bar .modes-top,
-  .panel .tray-head {
-    display: none;
+  .panel-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 18px 18px 4px;
   }
-  /* Before/after: press and hold, on the photo itself so it's easy to find on every screen. */
+  .panel-head h2 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .tool-hint {
+    margin-top: 3px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--muted);
+  }
+  .done {
+    display: none;
+    margin-left: auto;
+    padding: 7px 18px;
+    font-size: 0.88rem;
+  }
+  .body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    scrollbar-width: thin;
+  }
+  /* Each tool's controls slide in when they appear (tool switch, mode switch, tray opening). */
+  .body > :global(*) {
+    animation: tool-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes tool-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  /* Before/after: press and hold, under the photo so it's easy to find on every screen. */
   .hold {
     position: absolute;
     left: 50%;
-    bottom: 14px;
+    bottom: 12px;
     translate: -50% 0;
     z-index: 2;
     display: flex;
@@ -2274,8 +2383,9 @@
     gap: 6px;
     padding: 7px 14px 7px 11px;
     border-radius: 999px;
-    background: rgb(0 0 0 / 0.55);
-    color: #fff;
+    background: var(--field);
+    border: 1px solid var(--line);
+    color: var(--text);
     font-size: 0.82rem;
     font-weight: 600;
     -webkit-user-select: none;
@@ -2289,83 +2399,11 @@
   }
   .hold.on {
     background: var(--accent);
-    color: #111;
-  }
-  .modes {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    margin: 14px 14px 4px;
-  }
-  .modes button {
-    padding: 10px;
-    font-size: 0.98rem;
-    font-weight: 650;
+    border-color: var(--accent);
+    color: #1a1204;
   }
 
-  .tabs {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
-    padding: 10px 10px 6px;
-    border-bottom: 1px solid var(--glass-line);
-    flex: none;
-  }
-  .tab {
-    display: grid;
-    justify-items: center;
-    gap: 5px;
-    padding: 9px 4px 8px;
-    border-radius: 14px;
-    font-size: 0.75rem;
-    color: var(--muted);
-    transition:
-      background 150ms,
-      color 150ms;
-  }
-  .tab :global(svg) {
-    width: 22px;
-    height: 22px;
-  }
-  .tab:hover {
-    color: var(--text);
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-  }
-  .tab[aria-pressed="true"] {
-    color: var(--accent-ink);
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-  }
-  .tool-hint {
-    margin: 0;
-    font-size: 0.82rem;
-    line-height: 1.4;
-    color: var(--muted);
-  }
-
-  .body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 16px 18px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    scrollbar-width: thin;
-  }
-
-  /* ── Export sheet & dialogs ────────────────────────────────────────────── */
-
-  /* ── Bar tools: undo / redo / compare ──────────────────────────────────── */
-  .bar-tools {
-    display: flex;
-    gap: 2px;
-    margin-left: auto;
-  }
-  .meta + .bar-tools {
-    margin-left: 0;
-  }
-  .bar-tools + .bar-export {
-    margin-left: 4px;
-  }
+  /* ── Bar buttons ───────────────────────────────────────────────────────── */
   .icon-btn {
     width: 40px;
     height: 40px;
@@ -2379,12 +2417,8 @@
     width: 20px;
     height: 20px;
   }
-  .icon-btn:hover:not(:disabled),
-  .icon-btn.on {
-    background: color-mix(in srgb, var(--text) 12%, transparent);
-  }
-  .icon-btn.on {
-    color: var(--accent-ink);
+  .icon-btn:hover:not(:disabled) {
+    background: var(--field);
   }
 
   /* ── Overlays on the photo ─────────────────────────────────────────────── */
@@ -2486,86 +2520,47 @@
     cursor: nwse-resize;
   }
 
-  /* ── Panel extras ──────────────────────────────────────────────────────── */
-
-  /* ── Phone ─────────────────────────────────────────────────────────────── */
   /* ── Compact: phones and portrait tablets (keep in step with COMPACT in the script) ──
-     Photo first: a slim bar on top, the tool row at the bottom, and a tool tray that opens above it. */
+     Same order as desktop, stacked: bar · photo · (photos) · settings tray · tool row. */
   @media (max-width: 899px) and (min-height: 501px) {
     .app {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: auto minmax(0, 1fr) auto auto;
-      grid-template-areas: "bar" "stage" "strip" "panel";
-      gap: 8px;
-      padding: 8px;
-      padding-top: max(8px, env(safe-area-inset-top));
-      padding-bottom: max(8px, env(safe-area-inset-bottom));
-    }
-    .app:not(.empty) {
-      gap: 0;
-      padding: 0;
-      padding-top: env(safe-area-inset-top);
-      padding-bottom: env(safe-area-inset-bottom);
-    }
-    .app:not(.empty) > :is(.bar, .strip, .panel) {
-      box-shadow: none;
-      border-radius: 0;
-      border-width: 0;
-    }
-
-    /* Bar: add · Edit|Frame · undo/redo · Export */
-    .app:not(.empty) > .bar {
-      border-bottom-width: 1px;
-      background: var(--surface);
+      grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+      grid-template-areas: "bar" "stage" "strip" "panel" "rail";
     }
     .bar {
       min-height: 52px;
       gap: 6px;
       padding: 6px 8px;
-      min-width: 0;
     }
     .app:not(.empty) .wordmark,
+    .grid-btn,
     .meta,
-    .grid-btn {
+    .strip.single,
+    .strip-note,
+    .tool-hint,
+    .body > :global(.histo) {
       display: none;
     }
-    .bar .add-btn {
-      display: grid;
+    .app:not(.empty) .bar {
+      grid-template-columns: auto 1fr;
     }
-    .bar .modes-top {
-      display: inline-flex;
-      margin: 0 auto;
+    .app:not(.empty) .bar-side:first-child {
+      display: none;
     }
-    .modes-top button {
+    .modes button {
+      min-width: 0;
       padding: 6px 14px;
       font-size: 0.88rem;
-    }
-    .meta + .bar-tools,
-    .bar-tools {
-      gap: 0;
-      margin-left: 0;
     }
     .icon-btn {
       width: 38px;
       height: 38px;
     }
-    .icon-btn :global(svg) {
-      width: 20px;
-      height: 20px;
-    }
     .bar-export {
+      margin-left: 4px;
       padding: 8px 14px;
       font-size: 0.9rem;
-    }
-
-    /* Photos strip only when there is more than one photo */
-    .strip {
-      padding: 6px 10px;
-      background: transparent;
-    }
-    .strip.single,
-    .strip-note {
-      display: none;
     }
     .frame-pick,
     .frame-add {
@@ -2578,33 +2573,59 @@
       gap: 8px;
     }
 
-    /* Panel = tool row (always) + tray (when a tool is open) */
-    .app > .panel {
-      border-top-width: 1px;
+    /* Tool row along the bottom, settings tray right above it while a tool is open. */
+    .rail {
+      flex-direction: row;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 6px 8px;
+      border-right: 0;
+      border-top: 1px solid var(--line);
     }
-    .panel > .modes,
-    .tool-hint,
-    .body > :global(.histo) {
+    .tab {
+      flex: 1 0 60px;
+      gap: 3px;
+      padding: 7px 4px 6px;
+      font-size: 0.72rem;
+    }
+    .tab[aria-pressed="true"]::before {
+      left: 14px;
+      right: 14px;
+      top: -6px;
+      bottom: auto;
+      width: auto;
+      height: 3px;
+      border-radius: 0 0 3px 3px;
+    }
+    .panel {
+      border-left: 0;
+      border-top: 1px solid var(--line);
+    }
+    .panel:not(.open) {
       display: none;
     }
-    .panel .tray-head {
-      order: 1;
-      display: flex;
+    /* Slides up from behind the tool row with a little spring; back down when closing.
+       transform/opacity only, so it stays smooth on phones. */
+    .panel.open {
+      animation: tray-up 380ms cubic-bezier(0.34, 1.3, 0.64, 1);
+    }
+    .panel.closing {
+      animation: tray-down 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+    }
+    .rail {
+      z-index: 2; /* the tray slides out from behind it */
+    }
+    .panel-head {
       align-items: center;
-      gap: 10px;
       padding: 8px 10px 0 16px;
     }
-    .tray-head h2 {
+    .panel-head h2 {
       font-size: 0.95rem;
-      font-weight: 650;
     }
     .done {
-      margin-left: auto;
-      padding: 7px 18px;
-      font-size: 0.88rem;
+      display: block;
     }
     .body {
-      order: 2;
       max-height: 34dvh; /* about a third of the screen at most; the photo keeps the rest */
       padding: 10px 14px 12px;
       gap: 12px;
@@ -2614,76 +2635,45 @@
       flex-shrink: 0;
       min-width: 0;
     }
-    .panel:not(.open) :is(.tray-head, .body) {
-      display: none;
-    }
-    .tabs,
-    .tabs.many {
-      order: 3;
-      display: flex;
-      overflow-x: auto;
-      scrollbar-width: none;
-      gap: 2px;
-      padding: 6px 8px;
-      border-bottom: 0;
-    }
-    .panel.open .tabs {
-      border-top: 1px solid var(--glass-line);
-    }
-    .tabs .tab,
-    .tabs.many .tab {
-      flex: 1 0 60px;
-      gap: 3px;
-      padding: 6px 4px;
-      font-size: 0.72rem;
-    }
-    .tab :global(svg) {
-      width: 22px;
-      height: 22px;
-    }
     .hold {
       bottom: 10px;
     }
   }
-  /* Landscape phones: side panel (a bottom tray would squash the photo), with the same slim bar as compact. */
+  @keyframes tray-up {
+    from {
+      opacity: 0;
+      transform: translateY(48px);
+    }
+  }
+  @keyframes tray-down {
+    to {
+      opacity: 0;
+      transform: translateY(48px);
+    }
+  }
+  /* Landscape phones: desktop's left-to-right layout (a bottom tray would squash the photo), slimmer. */
   @media (max-height: 500px) {
     .app:not(.empty) {
-      grid-template-columns: minmax(0, 1fr) 300px;
-      gap: 6px;
-      padding: 6px;
+      grid-template-columns: 72px minmax(0, 1fr) 280px;
     }
     .bar {
       min-height: 44px;
-      padding: 3px 6px;
-      gap: 6px;
+      padding: 3px 8px;
     }
-    .app:not(.empty) .wordmark,
+    .app:not(.empty) .wm-text,
     .meta,
     .strip.single,
     .strip-note,
-    .panel > .modes,
     .tool-hint {
       display: none;
-    }
-    .bar .add-btn {
-      display: grid;
-    }
-    .bar .modes-top {
-      display: inline-flex;
-      margin: 0 auto;
     }
     .icon-btn {
       width: 36px;
       height: 36px;
     }
-    .bar-export {
-      padding: 7px 14px;
-    }
-    .tabs {
-      padding: 6px;
-    }
     .tab {
-      padding: 6px 2px;
+      padding: 7px 2px;
+      font-size: 0.66rem;
     }
     .fit {
       inset: 6px 6px 48px;

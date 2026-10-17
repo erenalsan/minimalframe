@@ -44,7 +44,7 @@
 }
 .btn.accent {
   background: var(--accent);
-  color: #111;
+  color: #1a1204;
 }
 .btn.accent:hover:not(:disabled) {
   background: var(--accent-strong);
