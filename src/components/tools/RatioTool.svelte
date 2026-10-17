@@ -1,8 +1,11 @@
 <script>
   // Frame shape for each platform: feed, story, carousel, print.
+  import Dial from "../../lib/Dial.svelte";
   import { RATIOS } from "../../lib/catalog.js";
 
-  let { frame = $bindable(), slices } = $props();
+  // item: the active photo (its carousel position). fillAxis: which way the photo can move inside the strip.
+  let { frame = $bindable(), item = $bindable(), slices, fillAxis } = $props();
+  const setFill = (axis, v) => (item.fill = { ...item.fill, [axis]: v / 100 });
   const setSlides = (n) => (frame.slides = Math.min(10, Math.max(2, n)));
 </script>
 
@@ -27,8 +30,20 @@
       <button aria-pressed={frame.slideShape === "1:1"} onclick={() => (frame.slideShape = "1:1")}>Square</button>
     </div>
   </div>
+  {#if fillAxis && item}
+    <Dial
+      id="d-fill"
+      label={fillAxis === "y" ? "Position: top ↔ bottom" : "Position: left ↔ right"}
+      hint="Which part of the photo fills the slides. You can also drag the photo itself."
+      bind:value={() => Math.round(item.fill[fillAxis] * 100), (v) => setFill(fillAxis, v)}
+      min={0}
+      max={100}
+      unit="%"
+      reset={50}
+    />
+  {/if}
   <p class="hint">
-    Your photo fills all {slices} slides (cropped from the centre to fit) and they line up seamlessly as people swipe.
+    Your photo fills all {slices} slides (drag the photo to choose which part) and they line up seamlessly as people swipe.
     Each slide is saved at up to {frame.slideShape === "1:1" ? "1080 × 1080" : "1080 × 1350"}, Instagram's full size, so
     wide shots keep their detail.
   </p>

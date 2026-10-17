@@ -46,5 +46,7 @@ export default defineConfig({
   ],
   // libraw-wasm loads its worker and .wasm via new URL(..., import.meta.url); pre-bundling breaks those paths.
   optimizeDeps: { exclude: ['libraw-wasm'] },
+  // The RAW and HEIF decoders are big on purpose and load only when such a file is opened.
+  build: { chunkSizeWarningLimit: 2100 },
   worker: { format: 'es' },
 })

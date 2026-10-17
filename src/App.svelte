@@ -58,6 +58,7 @@
     sliceCanvas,
     paintSamplePhoto,
   } from "./lib/imageUtils.js";
+  import { isHeif, heifSource } from "./lib/heifDecoder.js";
   import { parseLibrary } from "./lib/library.js";
   import {
     isRawFile,
@@ -215,17 +216,20 @@
   function holdPhoto(e) {
     if (cropping || e.button > 0) return;
     e.currentTarget.setPointerCapture?.(e.pointerId); // keep getting the gesture if the finger leaves the photo
+    if (positioning) return startFillDrag(e);
     swipe = { x: e.clientX, y: e.clientY, t: performance.now() };
     clearTimeout(holdTimer);
     holdTimer = setTimeout(() => (showOriginal = true), 120);
   }
   function movePhoto(e) {
+    if (fillDrag) return dragFill(e);
     if (swipe && Math.hypot(e.clientX - swipe.x, e.clientY - swipe.y) > 12) {
       clearTimeout(holdTimer);
       showOriginal = false;
     }
   }
   function releasePhoto(e) {
+    fillDrag = null;
     clearTimeout(holdTimer);
     showOriginal = false;
     if (swipe && e?.type === "pointerup") {
@@ -238,6 +242,40 @@
       }
     }
     swipe = null;
+  }
+
+  // ─── Carousel position ─────────────────────────────────────────────────────
+  // With the Ratio tool open on a carousel, dragging the photo slides it inside the strip (instead of
+  // compare/swipe), and the Ratio tool shows a Position slider for the direction that has room to move.
+  const positioning = $derived(
+    activeTab === "framing" && slices > 1 && activeTool.framing === "ratio" && (!compact || (trayOpen && trayView === "tool")),
+  );
+  // "y" when the photo is cropped top/bottom, "x" when cropped at the sides, null when it fits exactly.
+  const fillAxis = $derived.by(() => {
+    if (slices <= 1 || !processedImage || !activeItem) return null;
+    const c = layoutFrame(processedImage.width, processedImage.height, activeItem).crop;
+    return processedImage.height - c.sh > 1 ? "y" : processedImage.width - c.sw > 1 ? "x" : null;
+  });
+  let fillDrag = null;
+  function startFillDrag(e) {
+    const c = layoutFrame(processedImage.width, processedImage.height, activeItem).crop;
+    fillDrag = {
+      x: e.clientX,
+      y: e.clientY,
+      from: { ...activeItem.fill },
+      slackX: processedImage.width - c.sw,
+      slackY: processedImage.height - c.sh,
+      k: canvasEl.width / e.currentTarget.getBoundingClientRect().width, // canvas pixels per screen pixel
+    };
+  }
+  function dragFill(e) {
+    const d = fillDrag;
+    const clamp = (v) => Math.min(1, Math.max(0, v));
+    // Dragging down shows more of the top, like moving a photo behind a window.
+    activeItem.fill = {
+      x: d.slackX > 1 ? clamp(d.from.x - ((e.clientX - d.x) * d.k) / d.slackX) : d.from.x,
+      y: d.slackY > 1 ? clamp(d.from.y - ((e.clientY - d.y) * d.k) / d.slackY) : d.from.y,
+    };
   }
 
   // ─── Crop, straighten, rotate ──────────────────────────────────────────────
@@ -608,6 +646,7 @@
       frame: frameSnapshot(),
       dev: activeItem?.dev ?? null,
       crop: activeItem?.crop ?? null,
+      fill: activeItem?.fill ?? null,
       exif: activeItem?.exifOverride ?? null,
     });
   function commitSnapshot(snap) {
@@ -634,6 +673,7 @@
     if (item) {
       Object.assign(item.dev, o.dev);
       item.crop = o.crop;
+      if (o.fill) item.fill = o.fill;
       Object.assign(item.exifOverride, o.exif);
     }
     lastSnap = snap; // the change this causes is not a new step
@@ -728,12 +768,12 @@
   });
 
   /** Output scale for the current size preset (layout is proportional, so it can be computed up front). */
-  function exportScale(photoW, photoH, mode, exifOverride) {
+  function exportScale(photoW, photoH, mode, item) {
     const s = EXPORT_SIZES.find((x) => x.id === exportPrefs.size);
     if (!s?.width && !s?.long) return 1;
     const { canvasW: w, canvasH: h } =
       mode === "framed"
-        ? layoutFrame(photoW, photoH, exifOverride)
+        ? layoutFrame(photoW, photoH, item)
         : { canvasW: photoW, canvasH: photoH };
     // shortcut: rounding can land the Instagram width at 1079–1081px; Instagram resamples it anyway.
     // Carousel: the Instagram width applies to each slide.
@@ -764,11 +804,7 @@
     if (!exportOpen || !processedImage || !activeItem) return;
     const s = EXPORT_SIZES.find((x) => x.id === exportPrefs.size);
     const { w, h } = targetDims(s, "framed");
-    const sample = drawFramed(
-      document.createElement("canvas"),
-      processedImage,
-      activeItem.exifOverride,
-    );
+    const sample = drawFramed(document.createElement("canvas"), processedImage, activeItem);
     let cancelled = false;
     encodeCanvas(sample).then(({ blob }) => {
       if (cancelled) return;
@@ -906,6 +942,11 @@
             }
           }
 
+          if (isHeif(file)) {
+            loadingStatus = `Opening HEIF ${i + 1} of ${fileList.length}: ${file.name}`;
+            sourceBlob = await heifSource(file); // a JPEG unless the browser reads HEIF itself
+          }
+
           // Decode once, keep only a ≤1080px proxy. The full-res source is re-decoded from sourceBlob at export.
           const bitmap = await decodeUpright(sourceBlob);
           previewImage = applyExifOrientation(
@@ -975,6 +1016,7 @@
           small, // 160px source for looks and strip thumbnails
           dev: freshDev(), // this photo's own edits
           crop: null, // this photo's crop / rotation (see geometry.js)
+          fill: { x: 0.5, y: 0.5 }, // carousels: which part of the photo fills the strip (0..1, centre)
           exifOverride: {
             model: cameraName,
             lens: lensName,
@@ -1190,7 +1232,9 @@
     (allFonts().find((f) => f.id === frame.selectedFontId) || SYSTEM_FONTS[0])
       .css;
 
-  function layoutFrame(srcW, srcH, exifOverride) {
+  // item: the photo (its caption text, and for carousels which part of it fills the strip).
+  function layoutFrame(srcW, srcH, item) {
+    const exifOverride = item?.exifOverride;
     return computeFrameLayout(
       srcW,
       srcH,
@@ -1203,6 +1247,8 @@
         ratioId: frame.selectedRatioId,
         ratio,
         fill: slices > 1,
+        fillX: item?.fill?.x ?? 0.5,
+        fillY: item?.fill?.y ?? 0.5,
         captionSpace: frame.captionSpace,
         fontSize: frame.autoFontSize
           ? 26 * dynamicScaleFactor
@@ -1262,8 +1308,8 @@
     return c;
   }
 
-  function drawFramed(canvas, photo, exifOverride) {
-    const L = layoutFrame(photo.width, photo.height, exifOverride);
+  function drawFramed(canvas, photo, item) {
+    const L = layoutFrame(photo.width, photo.height, item);
     if (canvas.width !== L.canvasW || canvas.height !== L.canvasH) {
       canvas.width = L.canvasW;
       canvas.height = L.canvasH;
@@ -1383,7 +1429,7 @@
       activeItem.previewImage.width;
 
     // Full-resolution sizes for the info line and the export sheet.
-    const L = layoutFrame(srcW, srcH, activeItem.exifOverride);
+    const L = layoutFrame(srcW, srcH, activeItem);
     framedSize = {
       w: Math.round(L.canvasW * fullScale),
       h: Math.round(L.canvasH * fullScale),
@@ -1399,7 +1445,7 @@
       canvasEl.height = srcH;
       canvasEl.getContext("2d").drawImage(processedImage, 0, 0);
     } else {
-      drawFramed(canvasEl, processedImage, activeItem.exifOverride);
+      drawFramed(canvasEl, processedImage, activeItem);
     }
     canvasAspect = canvasEl.width / canvasEl.height;
   }
@@ -1431,6 +1477,7 @@
     const _pi = processedImage;
     const _ai = activeItem;
     const _ov = JSON.stringify(activeItem?.exifOverride);
+    const _fill = JSON.stringify(activeItem?.fill);
     const _limg = logoImage;
 
     scheduleRender(false);
@@ -1477,7 +1524,7 @@
       colorCanvas.width,
       colorCanvas.height,
       mode,
-      item.exifOverride,
+      item,
     );
     if (k < 1) {
       const small = document.createElement("canvas");
@@ -1503,11 +1550,7 @@
     }
 
     // 4. Exact Percentage Framing & Scaled Fonts for Full Resolution
-    const framed = drawFramed(
-      document.createElement("canvas"),
-      colorCanvas,
-      item.exifOverride,
-    );
+    const framed = drawFramed(document.createElement("canvas"), colorCanvas, item);
     // Explicitly free temporary colorCanvas memory
     colorCanvas.width = 0;
     colorCanvas.height = 0;
@@ -1685,7 +1728,7 @@
   class="sr-only"
   type="file"
   multiple
-  accept=".jpg,.jpeg,.png,.webp,.avif,.heic,.arw,.cr2,.cr3,.dng,.nef,.orf,.raf,.rw2,.pef,.srw"
+  accept="image/heic,image/heif,.jpg,.jpeg,.png,.webp,.avif,.heic,.heif,.arw,.cr2,.cr3,.dng,.nef,.orf,.raf,.rw2,.pef,.srw"
   onchange={onFileInput}
   tabindex="-1"
   aria-hidden="true"
@@ -1742,9 +1785,10 @@
       <!-- svelte-ignore a11y_no_static_element_interactions (keyboard: hold \ or the "Hold for original" button) -->
       <div
         class="print"
+        class:positioning
         style:--ar={canvasAspect}
         bind:this={printEl}
-        title={cropping ? undefined : "Press and hold to see the original"}
+        title={cropping ? undefined : positioning ? "Drag to choose which part of the photo fills the slides" : "Press and hold to see the original"}
         onpointerdown={holdPhoto}
         onpointermove={movePhoto}
         onpointerup={releasePhoto}
@@ -1991,7 +2035,7 @@
               onimport={importLibrary}
             />
           {:else if tool === "ratio"}
-            <RatioTool bind:frame={() => frame, keep} {slices} />
+            <RatioTool bind:frame={() => frame, keep} bind:item={() => activeItem, keep} {slices} {fillAxis} />
           {:else if tool === "border"}
             <BorderTool bind:frame={() => frame, keep} {autoAxis} />
           {:else if tool === "colors"}
@@ -2262,6 +2306,12 @@
     align-items: center;
     justify-content: center;
     container-type: size;
+  }
+  .print.positioning {
+    cursor: grab;
+  }
+  .print.positioning:active {
+    cursor: grabbing;
   }
   .print {
     position: relative;

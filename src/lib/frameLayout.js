@@ -27,6 +27,8 @@
  *   right). "spread": one slim row of settings spaced across the photo's width, camera name laid on the photo.
  * @param {boolean} [o.fill]  with a ratio: crop the photo to fill the frame instead of padding (carousels);
  *   the result then has crop = { sx, sy, sw, sh } (the part of the photo to draw) and the photo's size is sw × sh
+ * @param {number} [o.fillX]  fill only: which part shows across, 0 (left edge) … 1 (right edge); 0.5 = centre
+ * @param {number} [o.fillY]  fill only: which part shows up/down, 0 (top) … 1 (bottom); 0.5 = centre
  * @param {string|{ text: string, parts: { aspect: number, height: number }[] }} [o.brand]  the bar's brand: a text
  *   wordmark ("SONY"), or logos (see brandLogos.js) given by shape: width/height and height relative to text size
  */
@@ -105,7 +107,9 @@ export function computeFrameLayout(srcW, srcH, lines, o) {
     }
     w = Math.max(1, Math.min(srcW, w));
     h = Math.max(1, Math.min(srcH, h));
-    crop = { sx: Math.round((srcW - w) / 2), sy: Math.round((srcH - h) / 2), sw: w, sh: h };
+    // Which part of the photo: 0 = left/top edge, 1 = right/bottom edge, 0.5 = centre (the default).
+    const at = (v) => Math.min(1, Math.max(0, v ?? 0.5));
+    crop = { sx: Math.round((srcW - w) * at(o.fillX)), sy: Math.round((srcH - h) * at(o.fillY)), sw: w, sh: h };
     srcW = w;
     srcH = h;
     canvasW = w + 2 * pad;

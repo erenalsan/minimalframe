@@ -175,4 +175,20 @@ for (const [srcW, srcH] of [[2400, 3000], [6000, 4000], [12000, 2000], [4000, 40
   }
 }
 
+// Fill position: 0 and 1 reach the photo's edges, out-of-range values are clamped, and the crop's size
+// doesn't depend on where it sits.
+const fillAt = (srcW, srcH, fillX, fillY) => computeFrameLayout(srcW, srcH, [], {
+  marginH: 3, marginV: 3, ratioId: 'carousel', ratio: { w: 12, h: 5 }, captionSpace: 12, fontSize: 24, zone: 'bottom',
+  align: 'left', posX: 0, posY: 50, measure, fill: true, fillX, fillY,
+}).crop;
+const tall = [fillAt(2400, 3000, 0.5, 0), fillAt(2400, 3000, 0.5, 1), fillAt(2400, 3000, 0.5, 0.5), fillAt(2400, 3000, 0.5, -3)];
+assert.equal(tall[0].sy, 0);
+assert.equal(tall[1].sy + tall[1].sh, 3000);
+assert.ok(Math.abs(tall[2].sy - (3000 - tall[2].sh) / 2) <= 1);
+assert.equal(tall[3].sy, 0);
+assert.ok(tall.every((c) => c.sh === tall[0].sh && c.sx === 0));
+const wide = [fillAt(12000, 2000, 0, 0.5), fillAt(12000, 2000, 1, 0.5)];
+assert.equal(wide[0].sx, 0);
+assert.equal(wide[1].sx + wide[1].sw, 12000);
+
 console.log(`frameLayout: ${n} layouts + ${bars} bars + ${spreads} spreads + ${fills} fills OK`);
