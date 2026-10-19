@@ -1,4 +1,5 @@
 <script>
+  import { t } from "./i18n.svelte.js";
   // RGB + luminance histogram. Clipped ends are flagged so blown highlights / crushed shadows are obvious.
   let { bins } = $props();
 
@@ -15,15 +16,15 @@
 </script>
 
 <figure class="histo">
-  <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img" aria-label="Histogram of the edited photo">
+  <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img" aria-label={t("Histogram of the edited photo")}>
     <path d={path(bins.r)} fill="#ff5a5a" />
     <path d={path(bins.g)} fill="#5aff7a" />
     <path d={path(bins.b)} fill="#5a8cff" />
     <path class="lum" d={path(bins.l)} fill="#f2f2ee" />
   </svg>
   <figcaption>
-    <span class:on={clipLow}>{clipLow ? "Shadows clipped" : "Shadows"}</span>
-    <span class:on={clipHigh}>{clipHigh ? "Highlights clipped" : "Highlights"}</span>
+    <span class:on={clipLow}>{clipLow ? t("Shadows clipped") : t("Shadows")}</span>
+    <span class:on={clipHigh}>{clipHigh ? t("Highlights clipped") : t("Highlights")}</span>
   </figcaption>
 </figure>
 

@@ -1,6 +1,7 @@
 <script>
   // Caption: which camera details show, their text (per photo), layout, font, size, alignment and place.
   import Dial from "../../lib/Dial.svelte";
+  import { t } from "../../lib/i18n.svelte.js";
   import { EXIF_FIELDS, ALIGN_X } from "../../lib/catalog.js";
   import { allFonts, addFont, rememberFont, registerFile } from "../../lib/fontLibrary.svelte.js";
 
@@ -21,7 +22,7 @@
       const fonts = await window.queryLocalFonts();
       localFamilies = [...new Set(fonts.map((f) => f.family))].sort((a, b) => a.localeCompare(b));
     } catch (err) {
-      fontError = "Font access was blocked. Allow it in the browser's site settings, or upload a font file instead.";
+      fontError = t("Font access was blocked. Allow it in the browser's site settings, or upload a font file instead.");
       console.warn("[MinimalFrame] queryLocalFonts:", err);
     }
   }
@@ -44,7 +45,7 @@
       frame.selectedFontId = addFont(f.id, f.label, f.css);
       rememberFont({ kind: "file", family, buffer });
     } catch {
-      fontError = `${file.name} is not a font this browser can read. Use a .ttf, .otf, .woff or .woff2 file.`;
+      fontError = t("{name} is not a font this browser can read. Use a .ttf, .otf, .woff or .woff2 file.", { name: file.name });
     }
   }
 </script>
@@ -53,20 +54,20 @@
   <label class="switch">
     <input type="checkbox" role="switch" bind:checked={frame.showExif} />
     <span class="switch-track" aria-hidden="true"></span>
-    Show camera details
+    {t("Show camera details")}
   </label>
   {#if frame.showExif}
-    <label class="switch" title="Turns codes like ILCE-7RM4 or XF35mmF2 into Sony A7R IV and Fujifilm XF 35mm f/2">
+    <label class="switch" title={t("Turns codes like ILCE-7RM4 or XF35mmF2 into Sony A7R IV and Fujifilm XF 35mm f/2")}>
       <input type="checkbox" role="switch" bind:checked={frame.cleanNames} />
       <span class="switch-track" aria-hidden="true"></span>
-      Clean metadata names
+      {t("Clean metadata names")}
     </label>
     <div>
-      <p class="label">Layout</p>
+      <p class="label">{t("Layout")}</p>
       <div class="seg">
-        <button aria-pressed={frame.captionStyle === "stack"} onclick={() => (frame.captionStyle = "stack")}>Stacked</button>
-        <button aria-pressed={frame.captionStyle === "bar"} onclick={() => (frame.captionStyle = "bar")} title="Model and lens on the left; brand and settings on the right, like a camera watermark">Brand bar</button>
-        <button aria-pressed={frame.captionStyle === "spread"} onclick={() => (frame.captionStyle = "spread")} title="Settings spread across one slim row under the photo, camera name on the photo: the photo gets almost the whole frame">Spread</button>
+        <button aria-pressed={frame.captionStyle === "stack"} onclick={() => (frame.captionStyle = "stack")}>{t("Stacked")}</button>
+        <button aria-pressed={frame.captionStyle === "bar"} onclick={() => (frame.captionStyle = "bar")} title={t("Model and lens on the left; brand and settings on the right, like a camera watermark")}>{t("Brand bar")}</button>
+        <button aria-pressed={frame.captionStyle === "spread"} onclick={() => (frame.captionStyle = "spread")} title={t("Settings spread across one slim row under the photo, camera name on the photo: the photo gets almost the whole frame")}>{t("Spread")}</button>
       </div>
     </div>
     {#if item}
@@ -75,22 +76,22 @@
           <div class="field">
             <label class="field-check">
               <input type="checkbox" bind:checked={frame.exifDisplay[key]} />
-              {name}
+              {t(name)}
             </label>
-            <input class="text" type="text" bind:value={item.exifOverride[key]} placeholder={example} aria-label={name} disabled={!frame.exifDisplay[key]} />
+            <input class="text" type="text" bind:value={item.exifOverride[key]} placeholder={example} aria-label={t(name)} disabled={!frame.exifDisplay[key]} />
           </div>
         {/each}
       </div>
-      <p class="hint">Missing details? Type them in. Changes apply to this photo only.</p>
+      <p class="hint">{t("Missing details? Type them in. Changes apply to this photo only.")}</p>
     {/if}
 
     <div>
-      <p class="label">Font</p>
+      <p class="label">{t("Font")}</p>
       <div class="fonts">
         {#each allFonts() as f (f.id)}
           <button class="font" aria-pressed={frame.selectedFontId === f.id} onclick={() => (frame.selectedFontId = f.id)}>
             <span class="font-aa" style:font-family={f.css}>Aa</span>
-            <span class="font-name">{f.label}</span>
+            <span class="font-name">{t(f.label)}</span>
           </button>
         {/each}
       </div>
@@ -98,51 +99,51 @@
     <div class="font-more">
       {#if canBrowseLocalFonts}
         {#if localFamilies.length}
-          <label class="label" for="local-font">Fonts on this computer</label>
+          <label class="label" for="local-font">{t("Fonts on this computer")}</label>
           <input
             id="local-font"
             class="text"
             list="local-font-list"
-            placeholder="Type to search {localFamilies.length} fonts"
+            placeholder={t("Type to search {n} fonts", { n: localFamilies.length })}
             onchange={(e) => useLocalFont(e.currentTarget.value)}
           />
           <datalist id="local-font-list">
             {#each localFamilies as fam (fam)}<option value={fam}></option>{/each}
           </datalist>
         {:else}
-          <button class="btn ghost" onclick={browseLocalFonts}>Use a font from this computer</button>
+          <button class="btn ghost" onclick={browseLocalFonts}>{t("Use a font from this computer")}</button>
         {/if}
       {/if}
       <label class="btn ghost upload-font">
-        Upload a font file
+        {t("Upload a font file")}
         <input type="file" accept=".ttf,.otf,.woff,.woff2" onchange={onFontFile} class="sr-only" />
       </label>
       {#if fontError}<p class="hint warn" role="alert">{fontError}</p>{/if}
     </div>
 
     <div>
-      <p class="label">Size</p>
+      <p class="label">{t("Size")}</p>
       <div class="seg">
-        <button aria-pressed={frame.autoFontSize} onclick={() => (frame.autoFontSize = true)}>Fit automatically</button>
-        <button aria-pressed={!frame.autoFontSize} onclick={() => (frame.autoFontSize = false)}>Set by hand</button>
+        <button aria-pressed={frame.autoFontSize} onclick={() => (frame.autoFontSize = true)}>{t("Fit automatically")}</button>
+        <button aria-pressed={!frame.autoFontSize} onclick={() => (frame.autoFontSize = false)}>{t("Set by hand")}</button>
       </div>
     </div>
     {#if !frame.autoFontSize}
-      <Dial id="d-font" label="Text size" bind:value={frame.manualFontSize} min={10} max={80} reset={24} />
+      <Dial id="d-font" label={t("Text size")} bind:value={frame.manualFontSize} min={10} max={80} reset={24} />
     {/if}
     <div>
-      <p class="label">Alignment</p>
+      <p class="label">{t("Alignment")}</p>
       <div class="seg">
-        <button aria-pressed={frame.textAlign === "left"} onclick={() => setAlignment("left")}>Left</button>
-        <button aria-pressed={frame.textAlign === "center"} onclick={() => setAlignment("center")}>Center</button>
-        <button aria-pressed={frame.textAlign === "right"} onclick={() => setAlignment("right")}>Right</button>
+        <button aria-pressed={frame.textAlign === "left"} onclick={() => setAlignment("left")}>{t("Left")}</button>
+        <button aria-pressed={frame.textAlign === "center"} onclick={() => setAlignment("center")}>{t("Center")}</button>
+        <button aria-pressed={frame.textAlign === "right"} onclick={() => setAlignment("right")}>{t("Right")}</button>
       </div>
     </div>
     <div>
-      <p class="label">Place</p>
+      <p class="label">{t("Place")}</p>
       <div class="seg">
-        <button aria-pressed={frame.textZone === "bottom"} onclick={() => (frame.textZone = "bottom")}>Below photo</button>
-        <button aria-pressed={frame.textZone === "top"} onclick={() => (frame.textZone = "top")}>Above photo</button>
+        <button aria-pressed={frame.textZone === "bottom"} onclick={() => (frame.textZone = "bottom")}>{t("Below photo")}</button>
+        <button aria-pressed={frame.textZone === "top"} onclick={() => (frame.textZone = "top")}>{t("Above photo")}</button>
       </div>
     </div>
   {/if}

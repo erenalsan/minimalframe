@@ -1,6 +1,7 @@
 <script>
   // The export dialog: size, format and quality, then share, save or batch-save. App does the actual work.
   import Icon from "./Icon.svelte";
+  import { t, i18n, setLang, LANGUAGES } from "../lib/i18n.svelte.js";
   import { EXPORT_SIZES } from "../lib/catalog.js";
 
   let {
@@ -29,6 +30,7 @@
     slices,
     savesSeparately, // phones/tablets: separate images instead of a ZIP
   } = $props();
+  const gpsCount = $derived(filesList.filter((f) => f.hadGps).length);
 </script>
 
 <dialog
@@ -43,24 +45,24 @@
 >
   <div class="sheet-in">
     <div class="sheet-head">
-      <h2 id="export-title">Export</h2>
-      <button class="close" onclick={() => dialog.close()} disabled={isBatchExporting} aria-label="Close">×</button>
+      <h2 id="export-title">{t("Export")}</h2>
+      <button class="close" onclick={() => dialog.close()} disabled={isBatchExporting} aria-label={t("Close")}>×</button>
     </div>
 
     {#if isBatchExporting}
       <div class="progress" role="status">
-        <p>Exporting {batchProgress.current} of {batchProgress.total}</p>
+        <p>{t("Exporting {n} of {total}", { n: batchProgress.current, total: batchProgress.total })}</p>
         <div class="progress-track"><div style:width="{batchProgress.percent}%"></div></div>
         <p class="hint">{batchProgress.filename}</p>
       </div>
     {:else}
       <fieldset>
-        <legend class="label">Size</legend>
+        <legend class="label">{t("Size")}</legend>
         <div class="sizes">
           {#each EXPORT_SIZES as s (s.id)}
             <label class="size" class:on={exportPrefs.size === s.id}>
               <input type="radio" name="size" value={s.id} bind:group={exportPrefs.size} class="sr-only" />
-              <strong>{s.label}</strong>
+              <strong>{t(s.label)}</strong>
               <span>{sizeLabel(s, "framed")}</span>
             </label>
           {/each}
@@ -68,7 +70,7 @@
       </fieldset>
       <div class="two">
         <div>
-          <p class="label">Format</p>
+          <p class="label">{t("Format")}</p>
           <div class="seg">
             <button aria-pressed={exportPrefs.format === "jpeg"} onclick={() => (exportPrefs.format = "jpeg")}>JPEG</button>
             <button aria-pressed={exportPrefs.format === "png"} onclick={() => (exportPrefs.format = "png")}>PNG</button>
@@ -76,55 +78,63 @@
           </div>
         </div>
         <div>
-          <p class="label">Quality</p>
+          <p class="label">{t("Quality")}</p>
           <div class="seg">
             {#each [["good", "Good"], ["high", "High"], ["max", "Max"]] as [q, name] (q)}
-              <button aria-pressed={exportPrefs.quality === q} onclick={() => (exportPrefs.quality = q)} disabled={exportPrefs.format === "png"}>{name}</button>
+              <button aria-pressed={exportPrefs.quality === q} onclick={() => (exportPrefs.quality = q)} disabled={exportPrefs.format === "png"}>{t(name)}</button>
             {/each}
           </div>
         </div>
       </div>
       <p class="privacy">
-        🔒 Saved without metadata: no GPS location, serial numbers or camera data in the file{#if filesList.some((f) => f.hadGps)}.
-          {filesList.filter((f) => f.hadGps).length === 1 ? "1 photo had" : `${filesList.filter((f) => f.hadGps).length} photos had`} a GPS location, now removed{/if}.
+        🔒 {t("Saved without metadata: no GPS location, serial numbers or camera data in the file.")}
+        {#if gpsCount}{gpsCount === 1 ? t("1 photo had a GPS location, now removed.") : t("{n} photos had a GPS location, now removed.", { n: gpsCount })}{/if}
       </p>
-      {#if sizeEstimate}<p class="estimate">{sizeEstimate} per {slices > 1 ? "carousel" : "photo"}</p>{/if}
+      {#if sizeEstimate}<p class="estimate">{slices > 1 ? t("{size} per carousel", { size: sizeEstimate }) : t("{size} per photo", { size: sizeEstimate })}</p>{/if}
       <p class="hint">
         {exportPrefs.format === "png"
-          ? "PNG is lossless: the best quality, but large files."
+          ? t("PNG is lossless: the best quality, but large files.")
           : exportPrefs.format === "webp"
-            ? "WebP is about a third smaller than JPEG at the same quality."
-            : "JPEG works everywhere. High is a good balance; Max keeps every detail."}
+            ? t("WebP is about a third smaller than JPEG at the same quality.")
+            : t("JPEG works everywhere. High is a good balance; Max keeps every detail.")}
       </p>
 
       <div class="actions">
         {#if saveQueue}
-          <button class="btn accent big" onclick={saveNext}><Icon name="export" />Save image {saveQueue.next + 1} of {saveQueue.files.length}</button>
+          <button class="btn accent big" onclick={saveNext}><Icon name="export" />{t("Save image {n} of {total}", { n: saveQueue.next + 1, total: saveQueue.files.length })}</button>
         {/if}
         <!-- svelte-ignore a11y_autofocus -->
         {#if canShareFiles}
           {#if pendingShare}
-            <button class="btn accent big" onclick={() => shareFiles(pendingShare)}><Icon name="share" />Share now</button>
+            <button class="btn accent big" onclick={() => shareFiles(pendingShare)}><Icon name="share" />{t("Share now")}</button>
           {:else}
             <button class="btn accent big" onclick={shareImage} disabled={!processedImage || isDownloading} autofocus>
-              <Icon name="share" />{isDownloading ? "Preparing…" : "Share to Instagram & more"}
+              <Icon name="share" />{isDownloading ? t("Preparing…") : t("Share to Instagram & more")}
             </button>
           {/if}
         {/if}
         <button class={canShareFiles ? "btn ghost" : "btn accent big"} onclick={() => downloadImage("framed")} disabled={!processedImage || isDownloading} autofocus={!canShareFiles}>
-          {isDownloading && !canShareFiles ? "Exporting…" : slices > 1 ? `Save ${slices} carousel slides` : "Save framed photo"}
+          {isDownloading && !canShareFiles ? t("Exporting…") : slices > 1 ? t("Save {n} carousel slides", { n: slices }) : t("Save framed photo")}
         </button>
-        <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>Save photo only, without frame</button>
+        <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>{t("Save photo only, without frame")}</button>
         {#if filesList.length > 1}
           <button class="btn ghost" onclick={() => exportBatch("framed")} disabled={selectedCount === 0 || isDownloading}>
-            Save {selectedCount} framed {selectedCount === 1 ? "photo" : "photos"}{savesSeparately ? "" : " as ZIP"}
+            {selectedCount === 1
+              ? savesSeparately ? t("Save 1 framed photo") : t("Save 1 framed photo as ZIP")
+              : savesSeparately ? t("Save {n} framed photos", { n: selectedCount }) : t("Save {n} framed photos as ZIP", { n: selectedCount })}
           </button>
         {/if}
       </div>
       {#if downloadStatus}<p class="status" role="status">{downloadStatus}</p>{/if}
       {#if fallbackDownloadUrl}
-        <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>Download didn't start? Save {fallbackFilename}</a>
+        <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>{t("Download didn't start? Save {name}", { name: fallbackFilename })}</a>
       {/if}
+      <label class="lang">
+        <span>{t("Language")}</span>
+        <select value={i18n.lang} onchange={(e) => setLang(e.currentTarget.value)}>
+          {#each LANGUAGES as [id, name] (id)}<option value={id}>{name}</option>{/each}
+        </select>
+      </label>
     {/if}
   </div>
 </dialog>
@@ -165,6 +175,27 @@
     display: flex;
     flex-wrap: wrap;
     gap: 16px 22px;
+  }
+  /* Language lives here: the one sheet every user opens, without crowding the top bar. */
+  .lang {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .lang select {
+    min-height: 36px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--field);
+    color: var(--text);
+    font: inherit;
   }
   .fallback {
     color: var(--accent-ink);

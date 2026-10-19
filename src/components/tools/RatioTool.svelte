@@ -1,6 +1,7 @@
 <script>
   // Frame shape for each platform: feed, story, carousel, print.
   import Dial from "../../lib/Dial.svelte";
+  import { t } from "../../lib/i18n.svelte.js";
   import { RATIOS } from "../../lib/catalog.js";
 
   // item: the active photo (its carousel position). fillAxis: which way the photo can move inside the strip.
@@ -13,28 +14,28 @@
   {#each RATIOS as r (r.id)}
     <button class="ratio" aria-pressed={frame.selectedRatioId === r.id} onclick={() => (frame.selectedRatioId = r.id)}>
       <span class="ratio-glyph" class:loose={!r.w} style:aspect-ratio={r.w ? `${r.w} / ${r.h}` : r.id === "orig" ? "3 / 3.6" : r.id === "carousel" ? "12 / 5" : "3 / 2.4"}></span>
-      <span>{r.label}</span>
+      <span>{t(r.label)}</span>
     </button>
   {/each}
 </div>
 {#if frame.selectedRatioId === "carousel"}
   <div class="carousel">
-    <div class="stepper" role="group" aria-label="Number of slides">
-      <span class="label">Slides</span>
-      <button onclick={() => setSlides(slices - 1)} disabled={slices <= 2} aria-label="Fewer slides">−</button>
+    <div class="stepper" role="group" aria-label={t("Number of slides")}>
+      <span class="label">{t("Slides")}</span>
+      <button onclick={() => setSlides(slices - 1)} disabled={slices <= 2} aria-label={t("Fewer slides")}>−</button>
       <output aria-live="polite">{slices}</output>
-      <button onclick={() => setSlides(slices + 1)} disabled={slices >= 10} aria-label="More slides">+</button>
+      <button onclick={() => setSlides(slices + 1)} disabled={slices >= 10} aria-label={t("More slides")}>+</button>
     </div>
-    <div class="seg" role="group" aria-label="Slide shape">
+    <div class="seg" role="group" aria-label={t("Slide shape")}>
       <button aria-pressed={frame.slideShape !== "1:1"} onclick={() => (frame.slideShape = "4:5")}>4:5</button>
-      <button aria-pressed={frame.slideShape === "1:1"} onclick={() => (frame.slideShape = "1:1")}>Square</button>
+      <button aria-pressed={frame.slideShape === "1:1"} onclick={() => (frame.slideShape = "1:1")}>{t("Square")}</button>
     </div>
   </div>
   {#if fillAxis && item}
     <Dial
       id="d-fill"
-      label={fillAxis === "y" ? "Position: top ↔ bottom" : "Position: left ↔ right"}
-      hint="Which part of the photo fills the slides. You can also drag the photo itself."
+      label={fillAxis === "y" ? t("Position: top ↔ bottom") : t("Position: left ↔ right")}
+      hint={t("Which part of the photo fills the slides. You can also drag the photo itself.")}
       bind:value={() => Math.round(item.fill[fillAxis] * 100), (v) => setFill(fillAxis, v)}
       min={0}
       max={100}
@@ -43,9 +44,10 @@
     />
   {/if}
   <p class="hint">
-    Your photo fills all {slices} slides (drag the photo to choose which part) and they line up seamlessly as people swipe.
-    Each slide is saved at up to {frame.slideShape === "1:1" ? "1080 × 1080" : "1080 × 1350"}, Instagram's full size, so
-    wide shots keep their detail.
+    {t("Your photo fills all {n} slides (drag the photo to choose which part) and they line up seamlessly as people swipe.", { n: slices })}
+    {t("Each slide is saved at up to {size}, Instagram's full size, so wide shots keep their detail.", {
+      size: frame.slideShape === "1:1" ? "1080 × 1080" : "1080 × 1350",
+    })}
   </p>
 {/if}
 

@@ -1,6 +1,7 @@
 <script>
   // Hue, saturation and luminance of one colour band at a time. Updates replace objects (see CurveTool).
   import Dial from "../../lib/Dial.svelte";
+  import { t } from "../../lib/i18n.svelte.js";
   import { MIXER_BANDS } from "../../lib/developEngine.js";
   import { MIXER_SWATCH } from "../../lib/catalog.js";
 
@@ -12,6 +13,7 @@
     dev.mixer = { ...dev.mixer, [ui.band]: band };
   }
   const bandChanged = (b) => dev.mixer[b].some((v) => v !== 0);
+  const bandName = (b) => t(b[0].toUpperCase() + b.slice(1)); // "red" → t("Red")
 </script>
 
 <script module>
@@ -19,22 +21,22 @@
 </script>
 
 <div class="stack">
-  <div class="bands" role="group" aria-label="Color band">
+  <div class="bands" role="group" aria-label={t("Color band")}>
     {#each MIXER_BANDS as b (b)}
       <button
         class="band"
         class:changed={bandChanged(b)}
         style:--c={MIXER_SWATCH[b]}
         aria-pressed={ui.band === b}
-        aria-label={b}
+        aria-label={bandName(b)}
         onclick={() => (ui.band = b)}
       ></button>
     {/each}
   </div>
-  <Dial id="d-mix-h" hint="Shifts this color toward its neighbours on the color wheel." label="{ui.band[0].toUpperCase() + ui.band.slice(1)} hue" bind:value={() => mixerValue(0), (v) => setMixer(0, v)} min={-100} max={100} reset={0} signed />
-  <Dial id="d-mix-s" hint="How intense this one color is." label="Saturation" bind:value={() => mixerValue(1), (v) => setMixer(1, v)} min={-100} max={100} reset={0} signed />
-  <Dial id="d-mix-l" hint="How bright this one color is." label="Luminance" bind:value={() => mixerValue(2), (v) => setMixer(2, v)} min={-100} max={100} reset={0} signed />
-  <p class="hint">Shift one color without touching the rest: warmer greens, deeper blue skies, softer skin.</p>
+  <Dial id="d-mix-h" hint={t("Shifts this color toward its neighbours on the color wheel.")} label={t("{color} hue", { color: bandName(ui.band) })} bind:value={() => mixerValue(0), (v) => setMixer(0, v)} min={-100} max={100} reset={0} signed />
+  <Dial id="d-mix-s" hint={t("How intense this one color is.")} label={t("Saturation")} bind:value={() => mixerValue(1), (v) => setMixer(1, v)} min={-100} max={100} reset={0} signed />
+  <Dial id="d-mix-l" hint={t("How bright this one color is.")} label={t("Luminance")} bind:value={() => mixerValue(2), (v) => setMixer(2, v)} min={-100} max={100} reset={0} signed />
+  <p class="hint">{t("Shift one color without touching the rest: warmer greens, deeper blue skies, softer skin.")}</p>
 </div>
 
 <style>

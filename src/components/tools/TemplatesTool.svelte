@@ -3,6 +3,7 @@
   import { BUILTIN_PRESETS, SYSTEM_FONTS, frameRatio } from "../../lib/catalog.js";
   import { getContrastingColor } from "../../lib/imageUtils.js";
   import { allFonts } from "../../lib/fontLibrary.svelte.js";
+  import { t } from "../../lib/i18n.svelte.js";
 
   let { userPresets, hasLooks, libraryMessage, onapply, ondelete, onsave, onexport, onimport } = $props();
 </script>
@@ -12,7 +13,7 @@
     {@const r = frameRatio(p)}
     {@const f = allFonts().find((x) => x.id === p.selectedFontId) || SYSTEM_FONTS[0]}
     <div class="template">
-      <button onclick={() => onapply(p)} aria-label="Apply template {p.name}">
+      <button onclick={() => onapply(p)} aria-label={t("Apply template {name}", { name: t(p.name) })}>
         <span
           class="template-mini"
           style:background={p.backgroundColor}
@@ -21,21 +22,21 @@
           style:padding="{Math.max(6, p.customMarginH)}%"
         >
           <span class="template-photo"></span>
-          <span class="template-cap" style:font-family={f.css} style:text-align={p.textAlign}>Aa Camera</span>
+          <span class="template-cap" style:font-family={f.css} style:text-align={p.textAlign}>{t("Aa Camera")}</span>
         </span>
-        <span class="template-name">{p.name}</span>
+        <span class="template-name">{t(p.name)}</span>
       </button>
       {#if userPresets.includes(p)}
-        <button class="mini-del" onclick={(e) => ondelete(p.id, e)} aria-label="Delete template {p.name}">×</button>
+        <button class="mini-del" onclick={(e) => ondelete(p.id, e)} aria-label={t("Delete template {name}", { name: p.name })}>×</button>
       {/if}
     </div>
   {/each}
 </div>
-<button class="btn ghost" onclick={onsave}>Save current settings as a template</button>
+<button class="btn ghost" onclick={onsave}>{t("Save current settings as a template")}</button>
 <div class="row-btns">
-  <button class="btn ghost" onclick={onexport} disabled={!userPresets.length && !hasLooks}>Back up my templates and looks</button>
+  <button class="btn ghost" onclick={onexport} disabled={!userPresets.length && !hasLooks}>{t("Back up my templates and looks")}</button>
   <label class="btn ghost">
-    Import
+    {t("Import")}
     <input type="file" accept=".json,application/json" onchange={onimport} class="sr-only" />
   </label>
 </div>

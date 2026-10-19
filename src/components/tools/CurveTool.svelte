@@ -1,6 +1,7 @@
 <script>
   // Tone curve per channel. Updates replace the curve object, so undo snapshots and looks stay independent.
   import CurveEditor from "../../lib/CurveEditor.svelte";
+  import { t } from "../../lib/i18n.svelte.js";
   import { freshDev } from "../../lib/developEngine.js";
   import { CURVE_COLORS } from "../../lib/catalog.js";
 
@@ -17,12 +18,12 @@
 <div class="stack">
   <div class="seg">
     {#each [["rgb", "RGB"], ["r", "Red"], ["g", "Green"], ["b", "Blue"]] as [ch, name] (ch)}
-      <button aria-pressed={ui.channel === ch} onclick={() => (ui.channel = ch)}>{name}</button>
+      <button aria-pressed={ui.channel === ch} onclick={() => (ui.channel = ch)}>{t(name)}</button>
     {/each}
   </div>
-  <CurveEditor points={dev.curve[ui.channel]} onchange={setCurve} color={CURVE_COLORS[ui.channel]} label="{ui.channel.toUpperCase()} curve" />
-  <p class="hint">Click to add a point, drag to shape the curve, double-click a point to remove it.</p>
-  <button class="btn ghost" onclick={resetCurve}>Reset curves</button>
+  <CurveEditor points={dev.curve[ui.channel]} onchange={setCurve} color={CURVE_COLORS[ui.channel]} label={t("{channel} curve", { channel: ui.channel.toUpperCase() })} />
+  <p class="hint">{t("Click to add a point, drag to shape the curve, double-click a point to remove it.")}</p>
+  <button class="btn ghost" onclick={resetCurve}>{t("Reset curves")}</button>
 </div>
 
 <style>

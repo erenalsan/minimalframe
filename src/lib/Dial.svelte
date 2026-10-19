@@ -1,4 +1,5 @@
 <script>
+  import { t } from "./i18n.svelte.js";
   // Glass-style slider. Native <input type="range"> underneath,
   // so keyboard, screen readers and rAF-throttled rendering keep working unchanged.
   let {
@@ -62,17 +63,17 @@
         type="button"
         class="dial-info"
         title={hint}
-        aria-label="What does {label} do?"
+        aria-label={t("What does {label} do?", { label })}
         aria-expanded={hintOpen}
         onclick={() => (hintOpen = !hintOpen)}>i</button>
     {/if}
     {#if canReset}
-      <button type="button" class="dial-reset" onclick={() => (value = reset)}>Reset</button>
+      <button type="button" class="dial-reset" onclick={() => (value = reset)}>{t("Reset")}</button>
     {/if}
     <output
       for={id}
       class:changed={canReset}
-      title="Drag sideways to fine-tune"
+      title={t("Drag sideways to fine-tune")}
       onpointerdown={scrubStart}
       onpointermove={scrubMove}
       onpointerup={() => (scrub = null)}

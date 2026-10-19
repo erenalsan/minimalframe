@@ -1,4 +1,5 @@
 <script>
+  import { t } from "./i18n.svelte.js";
   // Tone-curve editor. Click to add a point, drag to move, double-click (or Delete) to remove.
   // Points are focusable: arrow keys move them, so the curve also works without a mouse.
   import { curveLUT } from "./color.js";
@@ -63,7 +64,7 @@
   bind:this={svg}
   viewBox="0 0 {S} {S}"
   role="application"
-  aria-label="{label}: click to add a point, drag to move it"
+  aria-label={t("{label}: click to add a point, drag to move it", { label })}
   onpointerdown={down}
   onpointermove={move}
   onpointerup={() => (dragIndex = -1)}
@@ -83,7 +84,7 @@
       style:fill={color}
       tabindex="0"
       role="slider"
-      aria-label="Point {i + 1}: input {Math.round(p[0] * 100)}%"
+      aria-label={t("Point {n}: input {value}%", { n: i + 1, value: Math.round(p[0] * 100) })}
       aria-valuenow={Math.round(p[1] * 100)}
       aria-valuemin="0"
       aria-valuemax="100"

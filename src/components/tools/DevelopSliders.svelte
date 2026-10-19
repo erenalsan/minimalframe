@@ -2,6 +2,7 @@
   // The plain slider tools: Light, Color, Detail and Film. Each slider edits one develop setting.
   // Desktop shows every slider; the compact (phone) tray shows one at a time, picked from a row of chips.
   import Dial from "../../lib/Dial.svelte";
+  import { t } from "../../lib/i18n.svelte.js";
 
   let { group, dev = $bindable() } = $props();
 
@@ -50,7 +51,7 @@
   const picked = $state({ light: 0, color: 0, detail: 0, film: 0 });
 </script>
 
-<div class="chips" role="tablist" aria-label="Adjustment">
+<div class="chips" role="tablist" aria-label={t("Adjustment")}>
   {#each g.sliders as s, i (s.key)}
     <button
       role="tab"
@@ -58,7 +59,7 @@
       class:changed={dev[s.key] !== s.reset}
       aria-selected={picked[group] === i}
       aria-controls={s.id}
-      onclick={() => (picked[group] = i)}>{s.label}</button
+      onclick={() => (picked[group] = i)}>{t(s.label)}</button
     >
   {/each}
 </div>
@@ -68,8 +69,8 @@
     <div class="slot" class:picked={picked[group] === i}>
       <Dial
         id={s.id}
-        label={s.label}
-        hint={s.hint}
+        label={t(s.label)}
+        hint={t(s.hint)}
         bind:value={dev[s.key]}
         min={s.min ?? 0}
         max={s.max ?? 100}
@@ -81,7 +82,7 @@
       />
     </div>
   {/each}
-  {#if g.note}<p class="hint note">{g.note}</p>{/if}
+  {#if g.note}<p class="hint note">{t(g.note)}</p>{/if}
 </div>
 
 <style>

@@ -2,6 +2,7 @@
   // Border and text colours: quick picks, colours from the photo, auto contrast, and saved pairs.
   import { QUICK_BACKGROUNDS } from "../../lib/catalog.js";
   import { tint } from "../../lib/palette.js";
+  import { t } from "../../lib/i18n.svelte.js";
 
   let { frame = $bindable(), photoPalette } = $props();
 
@@ -46,23 +47,23 @@
 
 <div class="stack">
   <div>
-    <p class="label">Border color</p>
+    <p class="label">{t("Border color")}</p>
     <div class="swatches">
       {#each QUICK_BACKGROUNDS as c (c)}
-        <button class="swatch" style:background={c} aria-pressed={frame.backgroundColor.toLowerCase() === c} aria-label="Border color {c}" onclick={() => (frame.backgroundColor = c)}></button>
+        <button class="swatch" style:background={c} aria-pressed={frame.backgroundColor.toLowerCase() === c} aria-label={t("Border color {c}", { c })} onclick={() => (frame.backgroundColor = c)}></button>
       {/each}
-      <label class="swatch swatch-custom" title="Pick any color">
+      <label class="swatch swatch-custom" title={t("Pick any color")}>
         <input type="color" bind:value={frame.backgroundColor} />
-        <span class="sr-only">Custom border color</span>
+        <span class="sr-only">{t("Custom border color")}</span>
       </label>
     </div>
   </div>
   {#if photoPalette?.length}
     <div>
-      <p class="label">From this photo</p>
+      <p class="label">{t("From this photo")}</p>
       <div class="swatches">
         {#each photoPalette.flatMap((c) => [tint(c), c]) as c (c)}
-          <button class="swatch" style:background={c} aria-pressed={frame.backgroundColor.toLowerCase() === c} aria-label="Border color {c}" onclick={() => (frame.backgroundColor = c)}></button>
+          <button class="swatch" style:background={c} aria-pressed={frame.backgroundColor.toLowerCase() === c} aria-label={t("Border color {c}", { c })} onclick={() => (frame.backgroundColor = c)}></button>
         {/each}
       </div>
     </div>
@@ -70,30 +71,30 @@
   <label class="switch">
     <input type="checkbox" role="switch" bind:checked={frame.autoContrast} />
     <span class="switch-track" aria-hidden="true"></span>
-    Pick text color automatically
+    {t("Pick text color automatically")}
   </label>
   {#if !frame.autoContrast}
     <label class="color-row">
       <input type="color" bind:value={frame.textColor} />
-      Text color <span class="hint">{frame.textColor}</span>
+      {t("Text color")} <span class="hint">{frame.textColor}</span>
     </label>
   {/if}
   {#if palettes.length > 0}
     <div>
-      <p class="label">Saved pairs</p>
+      <p class="label">{t("Saved pairs")}</p>
       <div class="swatches">
         {#each palettes as pal, i (i)}
           <span class="pair">
-            <button class="swatch" style:background={pal.bg} onclick={() => applyPalette(pal)} aria-label="Use saved pair {i + 1}">
+            <button class="swatch" style:background={pal.bg} onclick={() => applyPalette(pal)} aria-label={t("Use saved pair {n}", { n: i + 1 })}>
               <span class="pair-dot" style:background={pal.text}></span>
             </button>
-            <button class="mini-del" onclick={() => deletePalette(i)} aria-label="Delete saved pair {i + 1}">×</button>
+            <button class="mini-del" onclick={() => deletePalette(i)} aria-label={t("Delete saved pair {n}", { n: i + 1 })}>×</button>
           </span>
         {/each}
       </div>
     </div>
   {/if}
-  <button class="btn ghost" onclick={savePalette}>Save this color pair</button>
+  <button class="btn ghost" onclick={savePalette}>{t("Save this color pair")}</button>
 </div>
 
 <style>

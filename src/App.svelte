@@ -46,6 +46,8 @@
     dragRect,
     turnedSize,
   } from "./lib/geometry.js";
+  import { idbGet, idbSet, idbDel, idbKeys } from "./lib/store.js";
+  import { t, i18n } from "./lib/i18n.svelte.js";
   import { zoomAt, clampPan, NO_ZOOM, MAX_ZOOM } from "./lib/zoom.js";
   import {
     getContrastingColor,
@@ -60,7 +62,7 @@
     paintSamplePhoto,
   } from "./lib/imageUtils.js";
   import { isHeif, heifSource } from "./lib/heifDecoder.js";
-  import { parseLibrary } from "./lib/library.js";
+  import { parseLibrary, sanitizeDev } from "./lib/library.js";
   import {
     isRawFile,
     processRawFile,
@@ -787,9 +789,9 @@
       userLooks = [...userLooks, ...looks];
       persistPresets();
       persistLooks();
-      libraryMessage = `Added ${templates.length} templates and ${looks.length} looks.`;
+      libraryMessage = t("Added {templates} templates and {looks} looks.", { templates: templates.length, looks: looks.length });
     } catch (err) {
-      libraryMessage = `That file couldn't be imported: ${err.message}.`;
+      libraryMessage = t("That file couldn't be imported: {error}.", { error: err.message });
     }
   }
 
@@ -936,7 +938,8 @@
   }
 
   onMount(() => {
-    if (new URLSearchParams(location.search).has("shared")) loadSharedFiles();
+    const shared = new URLSearchParams(location.search).has("shared");
+    restoreSession().then(() => shared && loadSharedFiles());
     if (new URLSearchParams(location.search).has("fps")) import("./lib/fpsMeter.js").then((m) => m.startFpsMeter()); // testing on real devices
     loadPresets();
     // Canvas text can't swap fonts by itself; redraw once the bundled caption font is ready.
@@ -961,7 +964,7 @@
       }
       if (files.length) loadFiles(files);
     } catch (err) {
-      loadError = `Could not open the shared photos: ${err.message}`;
+      loadError = t("Could not open the shared photos: {error}", { error: err.message });
     }
   }
 
@@ -1030,8 +1033,8 @@
       const bytes = (blob.size / (sample.width * sample.height)) * w * h;
       sizeEstimate =
         bytes > 1e6
-          ? `about ${(bytes / 1e6).toFixed(1)} MB`
-          : `about ${Math.max(1, Math.round(bytes / 1e3))} KB`;
+          ? t("about {size}", { size: `${(bytes / 1e6).toFixed(1)} MB` })
+          : t("about {size}", { size: `${Math.max(1, Math.round(bytes / 1e3))} KB` });
     });
     return () => (cancelled = true);
   });
@@ -1082,9 +1085,110 @@
   );
 
   // ─── Loading photos ────────────────────────────────────────────────────────
+  // Narrow phones: when the top bar's buttons don't fit (long words like "Exportieren"), the Export button
+  // keeps its icon and drops its label. Checked whenever the bar's width, language or contents change.
+  let barEl = $state.raw(null);
+  let barTight = $state(false);
+  $effect(() => {
+    if (!barEl) return;
+    i18n.lang, started, activeItem;
+    let frame;
+    const overlaps = (a, b) => a && b && a.getBoundingClientRect().right > b.getBoundingClientRect().left - 4;
+    const shown = (el, last) => [...(el?.children ?? [])][last ? "findLast" : "find"]((c) => c.getClientRects().length); // skip hidden buttons
+    const check = () => {
+      barTight = false; // measure with the label shown
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const left = barEl.querySelector(".bar-side"), modes = barEl.querySelector(".modes"), end = barEl.querySelector(".bar-side.end");
+        barTight = overlaps(shown(left, true), modes) || overlaps(modes, shown(end));
+      });
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(barEl);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  });
+
+  // ─── Last session ──────────────────────────────────────────────────────────
+  // Open photos come back after a reload or after Android closes the app in the background: each photo's
+  // original file is stored once on the device, and a small record of every photo's edits, crop, caption
+  // and selection, plus the frame and mode, is saved half a second after changes settle (and at once when
+  // the app goes to the background). Nothing leaves the device.
+  const SESSION_KEY = "session";
+  const fileKey = (id) => `session-file:${id}`;
+  let sessionChecked = $state(false); // the landing page waits for this, so it doesn't flash before a restore
+  let sessionReady = $state(false); // saving starts once the last session is back
+  let pendingSession = null;
+  let sessionTimer;
+  function restoreItem(item, p) {
+    if (!p) return;
+    Object.assign(item.dev, sanitizeDev(p.dev));
+    item.crop = p.crop ?? null;
+    if (p.fill) item.fill = p.fill;
+    Object.assign(item.exifOverride, p.exif);
+    item.selected = p.selected ?? true;
+  }
+  async function restoreSession() {
+    try {
+      const s = await idbGet(SESSION_KEY);
+      const photos = s?.photos ?? [];
+      const files = await Promise.all(photos.map((p) => idbGet(fileKey(p.key))));
+      const keep = new Set(photos.map((p) => fileKey(p.key)));
+      for (const k of await idbKeys()) if (String(k).startsWith("session-file:") && !keep.has(k)) idbDel(k); // left by a session that never got saved
+      const found = photos.filter((_, i) => files[i]);
+      if (!found.length) return;
+      started = true;
+      sessionChecked = true;
+      await loadFiles(
+        found.map((p) => files[photos.indexOf(p)]).map((f, i) => (f instanceof File ? f : new File([f], found[i].name))),
+        found,
+      );
+      if (s.frame) applyFrame(s.frame); // after loading: opening photos resets the caption position
+      if (s.tab === "editor" || s.tab === "framing") activeTab = s.tab;
+      activeImageIndex = Math.max(0, Math.min(s.active ?? 0, filesList.length - 1));
+      scheduleRender(true);
+    } catch (err) {
+      console.warn("[MinimalFrame] Could not restore the last session:", err);
+    } finally {
+      sessionChecked = true;
+      sessionReady = true;
+    }
+  }
+  function saveSessionNow() {
+    clearTimeout(sessionTimer);
+    if (pendingSession) idbSet(SESSION_KEY, pendingSession);
+    pendingSession = null;
+  }
+  $effect(() => {
+    const snap = {
+      v: 1,
+      photos: filesList.map((f) => ({
+        key: f.id,
+        name: f.name,
+        dev: $state.snapshot(f.dev),
+        crop: $state.snapshot(f.crop),
+        fill: $state.snapshot(f.fill),
+        exif: $state.snapshot(f.exifOverride),
+        selected: f.selected,
+      })),
+      frame: frameSnapshot(),
+      active: activeImageIndex,
+      tab: activeTab,
+    };
+    if (!sessionReady) return;
+    pendingSession = snap;
+    clearTimeout(sessionTimer);
+    sessionTimer = setTimeout(saveSessionNow, 500);
+  });
+  // Android may close a backgrounded app without warning: save the moment it's hidden.
+  document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && saveSessionNow());
+
   let startPreset = null; // a frame picked on the landing page, applied to the photos it opens
   let started = $state(false); // once a photo has opened, removing them all leaves an empty workbench, not the landing page
-  async function loadFiles(fileList) {
+  // saved: when restoring the last session, each photo's saved state (same order as fileList).
+  async function loadFiles(fileList, saved = null) {
     if (!fileList || fileList.length === 0) return;
     isLoading = true;
     loadError = "";
@@ -1094,7 +1198,7 @@
 
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
-      loadingStatus = `Decoding ${i + 1} of ${fileList.length}: ${file.name}`;
+      loadingStatus = t("Opening {n} of {total}: {name}", { n: i + 1, total: fileList.length, name: file.name });
       try {
         const arrayBuffer = await file.arrayBuffer();
 
@@ -1138,7 +1242,7 @@
           hasRaw = true;
           const info = getRawFormatInfo(file.name);
           rawBadge = `${info.brand} (${info.extension.toUpperCase()})`;
-          loadingStatus = `Developing RAW ${i + 1} of ${fileList.length}: ${file.name}`;
+          loadingStatus = t("Developing RAW {n} of {total}: {name}", { n: i + 1, total: fileList.length, name: file.name });
         }
 
         if (linearRaw) {
@@ -1164,7 +1268,7 @@
           }
 
           if (isHeif(file)) {
-            loadingStatus = `Opening HEIF ${i + 1} of ${fileList.length}: ${file.name}`;
+            loadingStatus = t("Opening HEIF {n} of {total}: {name}", { n: i + 1, total: fileList.length, name: file.name });
             sourceBlob = await heifSource(file); // a JPEG unless the browser reads HEIF itself
           }
 
@@ -1218,7 +1322,7 @@
           : "";
 
         newItems.push({
-          id: `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          id: saved?.[i]?.key ?? `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
           file,
           name: file.name,
           sourceBlob, // Encoded original (or decoded RAW JPEG); decoded only at export
@@ -1251,12 +1355,14 @@
         });
       } catch (err) {
         console.error(`[MinimalFrame] Failed to load ${file.name}:`, err);
-        loadError = `Could not load ${file.name}: ${err.message}`;
+        loadError = t("Could not load {name}: {error}", { name: file.name, error: err.message });
       }
     }
 
     if (newItems.length > 0) {
       const startIndex = filesList.length;
+      if (saved) newItems.forEach((item) => restoreItem(item, saved.find((p) => p.key === item.id)));
+      else for (const item of newItems) idbSet(fileKey(item.id), item.file); // kept for the next launch
       filesList = [...filesList, ...newItems];
       started = true;
       activeImageIndex = startIndex; // Switch to first newly added photo
@@ -1320,7 +1426,7 @@
         aperture: "ƒ/5.6",
         shutterSpeed: "1/250s",
         iso: "ISO 100",
-        note: "Lake at golden hour",
+        note: t("Lake at golden hour"),
       });
     }
   }
@@ -1347,6 +1453,7 @@
         removed.previewImage.height = 0;
       }
     }
+    if (removed) idbDel(fileKey(removed.id));
     filesList = filesList.filter((_, idx) => idx !== index);
     if (filesList.length === 0) closeTray(); // nothing left to show in the photos tray or a tool
     if (activeImageIndex >= filesList.length) {
@@ -1495,6 +1602,18 @@
         },
       },
     );
+  }
+
+  // Caption fonts come in character subsets (Latin, Latin Extended…) that the browser fetches only when a
+  // character first needs one: ƒ in ƒ/5.6, ğ ş İ in Turkish, ß in German. Until then the canvas draws a
+  // fallback glyph of another width, which shifted the rest of the line. Preview: redraw once they arrive.
+  // Export: wait for them first.
+  const CAPTION_WEIGHTS = [400, 500, 600, 800];
+  function captionFonts(item) {
+    const text = buildExifLines(item?.exifOverride, frame.exifDisplay).map((l) => l.text).join(" ");
+    const faces = CAPTION_WEIGHTS.map((w) => `${w} 40px ${captionFamily()}`);
+    if (!text || !document.fonts || faces.every((f) => document.fonts.check(f, text))) return null;
+    return Promise.all(faces.map((f) => document.fonts.load(f, text).catch(() => {})));
   }
 
   /** Draws `photo` with border, caption and logo into `canvas` (resized to fit). */
@@ -1676,6 +1795,7 @@
       canvasEl.getContext("2d").drawImage(processedImage, 0, 0);
     } else {
       drawFramed(canvasEl, processedImage, activeItem);
+      captionFonts(activeItem)?.then(() => scheduleRender());
     }
     canvasAspect = canvasEl.width / canvasEl.height;
   }
@@ -1780,6 +1900,7 @@
     }
 
     // 4. Exact Percentage Framing & Scaled Fonts for Full Resolution
+    await captionFonts(item);
     const framed = drawFramed(document.createElement("canvas"), colorCanvas, item);
     // Explicitly free temporary colorCanvas memory
     colorCanvas.width = 0;
@@ -1846,7 +1967,11 @@
     const { files, next } = saveQueue;
     triggerDownload(files[next].blob, files[next].name);
     saveQueue = next + 1 < files.length ? { files, next: next + 1 } : null;
-    flashStatus(saveQueue ? `Saved ${next + 1} of ${files.length}. Tap Save for the next one.` : `Saved all ${files.length} images`);
+    flashStatus(
+      saveQueue
+        ? t("Saved {n} of {total}. Tap Save for the next one.", { n: next + 1, total: files.length })
+        : t("Saved all {n} images", { n: files.length }),
+    );
   }
 
   async function saveFiles(files, zipName) {
@@ -1876,19 +2001,23 @@
   async function downloadImage(mode = "framed") {
     if (!processedImage || !activeItem) return;
     isDownloading = true;
-    downloadStatus = "Exporting…";
+    downloadStatus = t("Exporting…");
     try {
       await new Promise((r) => setTimeout(r, 20)); // let the status paint
       const files = await renderFiles(activeItem, mode);
       const name = `${cleanName(activeItem.name, "photo")}_carousel.zip`;
       await saveFiles(files, name);
       if (!saveQueue) flashStatus(
-        files.length === 1 ? `Saved ${files[0].name}` : savesSeparately ? `Saved ${files.length} slides` : `Saved ${files.length} slides to ${name}`,
+        files.length === 1
+          ? t("Saved {name}", { name: files[0].name })
+          : savesSeparately
+            ? t("Saved {n} slides", { n: files.length })
+            : t("Saved {n} slides to {name}", { n: files.length, name }),
       );
     } catch (err) {
       console.error("[MinimalFrame] Download failed:", err);
-      loadError = `Export failed: ${err.message}`;
-      downloadStatus = "Export failed. See the message above the photo.";
+      loadError = t("Export failed: {error}", { error: err.message });
+      downloadStatus = t("Export failed. See the message above the photo.");
     } finally {
       isDownloading = false;
     }
@@ -1912,7 +2041,7 @@
         ),
       });
       pendingShare = null;
-      flashStatus("Shared");
+      flashStatus(t("Shared"));
     } catch (err) {
       if (err.name === "AbortError") return; // closed the share sheet
       // Rendering can outlast the tap that started it; keep the files and ask for one more tap.
@@ -1924,13 +2053,13 @@
   async function shareImage() {
     if (!activeItem) return;
     isDownloading = true;
-    downloadStatus = "Preparing…";
+    downloadStatus = t("Preparing…");
     try {
       await shareFiles(await renderFiles(activeItem, "framed"));
-      if (pendingShare) downloadStatus = "Ready to share";
+      if (pendingShare) downloadStatus = t("Ready to share");
     } catch (err) {
       console.error("[MinimalFrame] Share failed:", err);
-      loadError = `Share failed: ${err.message}`;
+      loadError = t("Share failed: {error}", { error: err.message });
       downloadStatus = "";
     } finally {
       isDownloading = false;
@@ -1956,13 +2085,14 @@
         await new Promise((r) => setTimeout(r, 20)); // let the progress bar paint
         files.push(...(await renderFiles(batch[i], mode, i)));
       }
-      batchProgress.filename = savesSeparately ? "Saving…" : "Packing the ZIP…";
+      batchProgress.filename = savesSeparately ? t("Saving…") : t("Packing the ZIP…");
       const name = `MinimalFrame_${new Date().toISOString().slice(0, 10)}_${total}photos.zip`;
       await saveFiles(files, name);
-      if (!saveQueue) flashStatus(savesSeparately ? `Saved ${files.length} images` : `Saved ${total} photos to ${name}`);
+      if (!saveQueue)
+        flashStatus(savesSeparately ? t("Saved {n} images", { n: files.length }) : t("Saved {n} photos to {name}", { n: total, name }));
     } catch (err) {
       console.error("[MinimalFrame] Batch export error:", err);
-      loadError = `Batch export failed: ${err.message}`;
+      loadError = t("Batch export failed: {error}", { error: err.message });
     } finally {
       isBatchExporting = false;
     }
@@ -2000,38 +2130,39 @@
   class:empty={!started}
   class:moving
 >
-  <header class="bar">
+  <header class="bar" class:tight={barTight} bind:this={barEl}>
     <div class="bar-side">
       <span class="wordmark"><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text">MinimalFrame</span></span>
       {#if activeItem}
-        <button class="photos-btn" class:on={compact && trayOpen && trayView === "photos"} onclick={togglePhotos} aria-label="Your photos ({filesList.length})" title="Your photos">
+        <button class="photos-btn" class:on={compact && trayOpen && trayView === "photos"} onclick={togglePhotos} aria-label={t("Your photos ({n})", { n: filesList.length })} title={t("Your photos")}>
           <img src={activeItem.thumbUrl} alt="" />
           {#if filesList.length > 1}<span class="count">{filesList.length}</span>{/if}
         </button>
       {/if}
     </div>
     {#if started}
-      <div class="seg modes" role="group" aria-label="Mode">
-        <button aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>Edit</button>
-        <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>Frame</button>
+      <div class="seg modes" role="group" aria-label={t("Mode")}>
+        <button aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>{t("Edit")}</button>
+        <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>{t("Frame")}</button>
       </div>
       <div class="bar-side end">
-        <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label="Add photos" title="Add photos"><Icon name="add" /></button>
-        <button class="icon-btn" onclick={undo} disabled={!canUndo || !activeItem} aria-label="Undo" title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
-        <button class="icon-btn" onclick={redo} disabled={!canRedo || !activeItem} aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><Icon name="redo" /></button>
+        <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label={t("Add photos")} title={t("Add photos")}><Icon name="add" /></button>
+        <button class="icon-btn" onclick={undo} disabled={!canUndo || !activeItem} aria-label={t("Undo")} title={t("Undo (Ctrl+Z)")}><Icon name="undo" /></button>
+        <button class="icon-btn" onclick={redo} disabled={!canRedo || !activeItem} aria-label={t("Redo")} title={t("Redo (Ctrl+Shift+Z)")}><Icon name="redo" /></button>
         <button
           class="btn accent bar-export"
+          aria-label={t("Export")}
           disabled={!activeItem}
           onclick={() => {
             exportDialog?.showModal();
             exportOpen = true;
-          }}><Icon name="export" />Export</button
+          }}><Icon name="export" /><span class="bar-export-label">{t("Export")}</span></button
         >
       </div>
     {/if}
   </header>
 
-  <section class="stage" aria-label="Preview">
+  <section class="stage" aria-label={t("Preview")}>
     <div class="fit" style:display={processedImage ? "flex" : "none"}>
       <!-- svelte-ignore a11y_no_static_element_interactions (keyboard: hold \ or the "Hold for original" button) -->
       <div
@@ -2044,7 +2175,7 @@
         style:--print-bg={activeTab === "framing" ? frame.backgroundColor : "transparent"}
         bind:this={printEl}
         style:transform={zoom.s > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : undefined}
-        title={cropping ? undefined : positioning ? "Drag to choose which part of the photo fills the slides" : "Press and hold to see the original. Pinch or double-tap to zoom."}
+        title={cropping ? undefined : positioning ? t("Drag to choose which part of the photo fills the slides") : t("Press and hold to see the original. Pinch or double-tap to zoom.")}
         onpointerdown={holdPhoto}
         onpointermove={movePhoto}
         onpointerup={releasePhoto}
@@ -2055,7 +2186,7 @@
         <canvas
           bind:this={canvasEl}
           style:--pa={canvasAspect}
-          aria-label="Preview of {activeItem?.name ?? 'your photo'}"
+          aria-label={t("Preview of {name}", { name: activeItem?.name ?? "" })}
         ></canvas>
         <canvas class="ghost" bind:this={ghostEl} aria-hidden="true"></canvas>
         {#if dev.softBloom > 0}
@@ -2094,7 +2225,7 @@
               class="crop-box"
               role="group"
               tabindex="0"
-              aria-label="Crop area. Arrow keys move it, Shift plus arrow keys resize it."
+              aria-label={t("Crop area. Arrow keys move it, Shift plus arrow keys resize it.")}
               style:left="{crop.x * 100}%"
               style:top="{crop.y * 100}%"
               style:width="{crop.w * 100}%"
@@ -2129,8 +2260,8 @@
       <button
         class="hold"
         class:on={showOriginal}
-        aria-label="Hold to see the original"
-        title="Hold to see the original (\)"
+        aria-label={t("Hold to see the original")}
+        title={t("Hold to see the original") + " (\\)"}
         onpointerdown={() => (showOriginal = true)}
         onpointerup={() => (showOriginal = false)}
         onpointerleave={() => (showOriginal = false)}
@@ -2139,15 +2270,15 @@
         onkeydown={(e) => (e.key === " " || e.key === "Enter") && (showOriginal = true)}
         onkeyup={() => (showOriginal = false)}
       >
-        <Icon name="compare" /><span>Hold for original</span>
+        <Icon name="compare" /><span>{t("Hold for original")}</span>
       </button>
     {/if}
 
     {#if zoom.s > 1 && !cropping}
-      <button class="zoom-pill glass" onclick={() => (zoom = NO_ZOOM)} aria-label="Zoomed {zoom.s.toFixed(1)} times. Fit the photo">{zoom.s.toFixed(1)}× · Fit</button>
+      <button class="zoom-pill glass" onclick={() => (zoom = NO_ZOOM)} aria-label={t("Zoomed {n} times. Fit the photo", { n: zoom.s.toFixed(1) })}>{zoom.s.toFixed(1)}× · {t("Fit")}</button>
     {/if}
 
-    {#if !started || !activeItem}
+    {#if sessionChecked && (!started || !activeItem)}
       <Landing
         bare={started}
         {isLoading}
@@ -2167,13 +2298,13 @@
     {#if loadError}
       <p class="alert glass" role="alert">
         {loadError}
-        <button onclick={() => (loadError = "")} aria-label="Dismiss">×</button>
+        <button onclick={() => (loadError = "")} aria-label={t("Dismiss")}>×</button>
       </p>
     {/if}
   </section>
 
   {#if started}
-    <nav class="strip" class:single={filesList.length === 1} aria-label="Your photos">
+    <nav class="strip" class:single={filesList.length === 1} aria-label={t("Your photos")}>
       <ol>
         {#each filesList as item, i (item.id)}
           <li class="frame" class:active={activeImageIndex === i}>
@@ -2181,19 +2312,19 @@
               class="frame-pick"
               onclick={() => setActiveImage(i)}
               aria-current={activeImageIndex === i ? "true" : undefined}
-              aria-label="Show {item.name}"
+              aria-label={t("Show {name}", { name: item.name })}
             >
               <img src={item.thumbUrl} alt="" />
               {#if item.isRaw}<span class="frame-raw">RAW</span>{/if}
             </button>
-            <label class="frame-sel" title="Include in batch export">
+            <label class="frame-sel" title={t("Include in batch export")}>
               <input type="checkbox" bind:checked={item.selected} />
-              <span class="sr-only">Include {item.name} in batch export</span>
+              <span class="sr-only">{t("Include {name} in batch export", { name: item.name })}</span>
             </label>
             <button
               class="mini-del frame-del"
               onclick={(e) => removeImage(i, e)}
-              aria-label="Remove {item.name}">×</button
+              aria-label={t("Remove {name}", { name: item.name })}>×</button
             >
           </li>
         {/each}
@@ -2201,24 +2332,24 @@
           <button
             class="frame-add"
             onclick={() => fileInput?.click()}
-            aria-label="Add photos">+</button
+            aria-label={t("Add photos")}>+</button
           >
         </li>
       </ol>
       {#if filesList.length > 1}<p class="strip-note">
-          {selectedCount} of {filesList.length} in batch
+          {t("{n} of {total} in batch", { n: selectedCount, total: filesList.length })}
         </p>{/if}
     </nav>
 
-    <nav class="rail" aria-label="Tools">
+    <nav class="rail" aria-label={t("Tools")}>
       {#each TOOLS[activeTab] as [id, name] (id)}
         <button
           class="tab"
-          title={TOOL_HINTS[id]}
+          title={t(TOOL_HINTS[id])}
           aria-pressed={toolOpen(id)}
           onclick={() => pickTool(id)}
         >
-          <Icon name={id} /><span>{name}</span>
+          <Icon name={id} /><span>{t(name)}</span>
         </button>
       {/each}
     </nav>
@@ -2228,13 +2359,14 @@
       bind:this={panelEl}
       style:height={trayPull ? `${Math.max(0, pullFrom - trayPull)}px` : undefined}
       class:open={trayOpen}
-      class:closing={trayClosing} aria-label="{TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]} settings">
+      class:closing={trayClosing}
+      aria-label={t("{tool} settings", { tool: t(TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]) })}>
       <div class="panel-head">
         <div>
-          <h2>{compact && trayView === "photos" ? "Photos" : TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]}</h2>
-          <p class="tool-hint">{TOOL_HINTS[activeTool[activeTab]]}</p>
+          <h2>{compact && trayView === "photos" ? t("Photos") : t(TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1])}</h2>
+          <p class="tool-hint">{t(TOOL_HINTS[activeTool[activeTab]])}</p>
         </div>
-        <button class="btn accent done" onclick={closeTray}>Done</button>
+        <button class="btn accent done" onclick={closeTray}>{t("Done")}</button>
       </div>
 
       <div class="body" id="tool-body">
@@ -2247,14 +2379,13 @@
             onadd={() => fileInput?.click()}
           />
         {:else if activeTab === "editor" && !activeItem}
-          <p class="tool-hint">Add a photo to edit it.</p>
+          <p class="tool-hint">{t("Add a photo to edit it.")}</p>
         {:else if activeTab === "editor"}
           {@const tool = activeTool.editor}
           {#if histo}<Histogram bins={histo} />{/if}
           {#if !canDevelop}
             <p class="hint">
-              This device can't run the full editor, so only exposure, contrast
-              and saturation are applied.
+              {t("This device can't run the full editor, so only exposure, contrast and saturation are applied.")}
             </p>
           {/if}
           {#if tool === "looks"}
@@ -2377,7 +2508,7 @@
 
   {#if isDragging}
     <div class="drop-overlay" aria-hidden="true">
-      <p>Drop anywhere to upload a <em>shoot</em></p>
+      <p>{t("Drop anywhere to open your photos")}</p>
     </div>
   {/if}
 </main>
@@ -2540,6 +2671,12 @@
   .bar-export {
     margin-left: 8px;
     padding: 9px 16px;
+  }
+  .bar.tight .bar-export-label {
+    display: none;
+  }
+  .bar.tight .bar-export {
+    padding-inline: 11px;
   }
   /* File name and size, as a caption under the photo. */
   .meta {

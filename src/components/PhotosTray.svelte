@@ -1,30 +1,32 @@
 <script>
   // Phones: every open photo as a big tile — tap to switch, add more, remove, tick for batch export.
   import Icon from "./Icon.svelte";
+  import { t } from "../lib/i18n.svelte.js";
 
   let { filesList = $bindable(), activeIndex, onpick, onremove, onadd } = $props();
   const ticked = $derived(filesList.filter((f) => f.selected).length);
 </script>
 
 <div class="photos">
-  <button class="add" onclick={onadd}><Icon name="add" /><span>Add photos</span></button>
+  <button class="add" onclick={onadd}><Icon name="add" /><span>{t("Add photos")}</span></button>
   {#each filesList as f, i (f.id)}
     <div class="photo" class:active={i === activeIndex}>
-      <button class="pick" onclick={() => onpick(i)} aria-current={i === activeIndex ? "true" : undefined} aria-label="Show {f.name}">
+      <button class="pick" onclick={() => onpick(i)} aria-current={i === activeIndex ? "true" : undefined} aria-label={t("Show {name}", { name: f.name })}>
         <img src={f.thumbUrl} alt="" />
         {#if f.isRaw}<span class="raw">RAW</span>{/if}
       </button>
-      <label class="sel" title="Include in batch export">
+      <label class="sel" title={t("Include in batch export")}>
         <input type="checkbox" bind:checked={f.selected} />
-        <span class="sr-only">Include {f.name} in batch export</span>
+        <span class="sr-only">{t("Include {name} in batch export", { name: f.name })}</span>
       </label>
-      <button class="mini-del" onclick={(e) => onremove(i, e)} aria-label="Remove {f.name}">×</button>
+      <button class="mini-del" onclick={(e) => onremove(i, e)} aria-label={t("Remove {name}", { name: f.name })}>×</button>
     </div>
   {/each}
 </div>
 <p class="hint">
-  {filesList.length > 1 ? `${ticked} of ${filesList.length} ticked for batch export. ` : ""}Swipe the photo left or right to
-  switch between photos.
+  {filesList.length > 1 ? t("{n} of {total} ticked for batch export.", { n: ticked, total: filesList.length }) + " " : ""}{t(
+    "Swipe the photo left or right to switch between photos.",
+  )}
 </p>
 
 <style>

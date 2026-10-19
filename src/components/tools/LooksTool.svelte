@@ -1,6 +1,7 @@
 <script>
   // Looks: built-in and saved looks, imported LUTs, matching another photo, and pasted Fujifilm recipes.
   import Dial from "../../lib/Dial.svelte";
+  import { t } from "../../lib/i18n.svelte.js";
   import { DEV_DEFAULTS, freshDev, develop, cssFilterFor } from "../../lib/developEngine.js";
   import { LOOKS } from "../../lib/catalog.js";
   import { parseRecipe } from "../../lib/recipes.js";
@@ -48,12 +49,16 @@
   function applyRecipe() {
     const r = parseRecipe(ui.recipeText);
     if (!r.sim && JSON.stringify(r.params) === JSON.stringify(freshDev())) {
-      ui.recipeNote = "No recipe settings found. Paste lines like “Film Simulation: Classic Chrome”, “Highlight: -1”.";
+      ui.recipeNote = t("No recipe settings found. Paste lines like “Film Simulation: Classic Chrome”, “Highlight: -1”.");
+      ui.recipeApplied = false;
       return;
     }
     Object.assign(dev, r.params);
     ui.recipeName = r.name;
-    ui.recipeNote = r.ignored.length ? `Applied. Not available here: ${r.ignored.map((l) => l.split(":")[0]).join(", ")}.` : "Applied.";
+    ui.recipeNote = r.ignored.length
+      ? t("Applied. Not available here: {settings}.", { settings: r.ignored.map((l) => l.split(":")[0]).join(", ") })
+      : t("Applied.");
+    ui.recipeApplied = true;
   }
 
   // ─── Match look ────────────────────────────────────────────────────────────
@@ -147,7 +152,7 @@
 
 <script module>
   // Survives switching tools, like the rest of the panel.
-  const ui = $state({ recipeText: "", recipeNote: "", recipeName: "" });
+  const ui = $state({ recipeText: "", recipeNote: "", recipeName: "", recipeApplied: false });
   // Rendered thumbnails per photo (its 160px proxy) → { params JSON or "auto" → image }; gone with the photo.
   const thumbCache = new WeakMap();
 </script>
@@ -155,9 +160,9 @@
 <div class="looks">
   {#if canDevelop && item?.small}
     <div class="look-cell">
-      <button class="look auto" aria-pressed={autoLook ? isLookActive(autoLook) : false} disabled={!autoLook} onclick={() => applyLook(autoLook)} title="Fixes brightness, contrast, white balance and colour for this photo">
+      <button class="look auto" aria-pressed={autoLook ? isLookActive(autoLook) : false} disabled={!autoLook} onclick={() => applyLook(autoLook)} title={t("Fixes brightness, contrast, white balance and colour for this photo")}>
         <img src={autoLook?.thumb ?? item.thumbUrl} alt="" />
-        <span>Auto</span>
+        <span>{t("Auto")}</span>
       </button>
     </div>
   {/if}
@@ -169,26 +174,26 @@
         {:else}
           <img src={item?.thumbUrl} alt="" style:filter={cssFilterFor(look.params)} />
         {/if}
-        <span>{look.name}</span>
+        <span>{t(look.name)}</span>
       </button>
       {#if userLooks.includes(look)}
-        <button class="mini-del" onclick={() => ondeletelook(look.id)} aria-label="Delete look {look.name}">×</button>
+        <button class="mini-del" onclick={() => ondeletelook(look.id)} aria-label={t("Delete look {name}", { name: look.name })}>×</button>
       {/if}
     </div>
   {/each}
 </div>
 <div class="row-btns">
-  <button class="btn ghost" onclick={() => onsavelook("")}>Save as my look</button>
-  <button class="btn ghost" onclick={resetColorAdjustments}>Reset all edits</button>
+  <button class="btn ghost" onclick={() => onsavelook("")}>{t("Save as my look")}</button>
+  <button class="btn ghost" onclick={resetColorAdjustments}>{t("Reset all edits")}</button>
 </div>
 {#if selectedCount > 1}
-  <button class="btn ghost" onclick={applyEditsToSelected}>Apply these edits to the other {selectedCount - 1} selected</button>
+  <button class="btn ghost" onclick={applyEditsToSelected}>{t("Apply these edits to the other {n} selected", { n: selectedCount - 1 })}</button>
 {/if}
 
 {#if canDevelop}
   <section class="sub">
     <p class="label">LUTs</p>
-    <p class="hint">Import .cube files from Lightroom, Resolve or your favourite creators.</p>
+    <p class="hint">{t("Import .cube files from Lightroom, Resolve or your favourite creators.")}</p>
     <div class="looks">
       {#each lutLib.list as l (l.id)}
         <div class="look-cell">
@@ -196,56 +201,56 @@
             <img src={lutThumbs[l.id] ?? item?.thumbUrl} alt="" />
             <span>{l.name}</span>
           </button>
-          <button class="mini-del" onclick={() => removeLut(l.id)} aria-label="Delete LUT {l.name}">×</button>
+          <button class="mini-del" onclick={() => removeLut(l.id)} aria-label={t("Delete LUT {name}", { name: l.name })}>×</button>
         </div>
       {/each}
       <label class="look look-add">
         <input type="file" accept=".cube" multiple class="sr-only" onchange={importLuts} />
-        <span aria-hidden="true">+</span><span>Import .cube</span>
+        <span aria-hidden="true">+</span><span>{t("Import .cube")}</span>
       </label>
     </div>
     {#if dev.lut}
-      <Dial id="d-lut" label="LUT strength" bind:value={dev.lutAmount} unit="%" reset={100} hint="Blend between your edit and the LUT. Applied on top of all other edits." />
+      <Dial id="d-lut" label={t("LUT strength")} bind:value={dev.lutAmount} unit="%" reset={100} hint={t("Blend between your edit and the LUT. Applied on top of all other edits.")} />
     {/if}
   </section>
 
   {#if filesList.length > 1}
     <section class="sub">
-      <p class="label">Match look</p>
-      <p class="hint">Make this photo's brightness, white balance, contrast and colour follow another photo.</p>
+      <p class="label">{t("Match look")}</p>
+      <p class="hint">{t("Make this photo's brightness, white balance, contrast and colour follow another photo.")}</p>
       <div class="match-row">
         {#each filesList as f, i (f.id)}
           {#if f !== item}
-            <button class="match-pick" onclick={() => matchItemTo(item, f)} aria-label="Match to {f.name}" title="Match to {f.name}">
+            <button class="match-pick" onclick={() => matchItemTo(item, f)} aria-label={t("Match to {name}", { name: f.name })} title={t("Match to {name}", { name: f.name })}>
               <img src={f.thumbUrl} alt="" />
             </button>
           {/if}
         {/each}
       </div>
       {#if selectedCount > 1}
-        <button class="btn ghost" onclick={matchSelectedToActive}>Match the other {selectedCount - 1} selected to this photo</button>
+        <button class="btn ghost" onclick={matchSelectedToActive}>{t("Match the other {n} selected to this photo", { n: selectedCount - 1 })}</button>
       {/if}
     </section>
   {/if}
 {/if}
 
 <details class="sub recipe">
-  <summary class="label">Paste a Fujifilm recipe</summary>
+  <summary class="label">{t("Paste a Fujifilm recipe")}</summary>
   <textarea
     class="text"
     rows="7"
     bind:value={ui.recipeText}
     placeholder={"Film Simulation: Classic Chrome\nDynamic Range: DR400\nHighlight: -1\nShadow: +1\nColor: +2\nWhite Balance: Daylight, +2 Red & -4 Blue\nGrain Effect: Weak, Small"}
-    aria-label="Fujifilm recipe text"
+    aria-label={t("Fujifilm recipe text")}
   ></textarea>
   <div class="row-btns">
-    <button class="btn accent" onclick={applyRecipe} disabled={!ui.recipeText.trim()}>Apply recipe</button>
-    {#if ui.recipeNote.startsWith("Applied")}
-      <button class="btn ghost" onclick={() => onsavelook(ui.recipeName)}>Save as my look</button>
+    <button class="btn accent" onclick={applyRecipe} disabled={!ui.recipeText.trim()}>{t("Apply recipe")}</button>
+    {#if ui.recipeApplied}
+      <button class="btn ghost" onclick={() => onsavelook(ui.recipeName)}>{t("Save as my look")}</button>
     {/if}
   </div>
   {#if ui.recipeNote}<p class="hint" role="status">{ui.recipeNote}</p>{/if}
-  <p class="hint">Film simulations are approximations of Fujifilm's in-camera looks.</p>
+  <p class="hint">{t("Film simulations are approximations of Fujifilm's in-camera looks.")}</p>
 </details>
 
 <style>

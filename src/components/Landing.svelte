@@ -5,6 +5,7 @@
 
   // bare: just the print well, standing in for the photo on the workbench once every photo has been removed.
   import Icon from "./Icon.svelte";
+  import { t, i18n, setLang, LANGUAGES } from "../lib/i18n.svelte.js";
   let { bare = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick } = $props();
 
   const preset = (id) => BUILTIN_PRESETS.find((p) => p.id === `preset_${id}`);
@@ -25,11 +26,11 @@
   <div class="well" class:over={isDragging}>
     <span class="mark tl"></span><span class="mark tr"></span><span class="mark bl"></span><span class="mark br"></span>
     {#if bare}<span class="plus" aria-hidden="true"><Icon name="add" /></span>{/if}
-    <p class="well-title">{isDragging ? "Drop to open" : "Drop photos here"}</p>
+    <p class="well-title">{isDragging ? t("Drop to open") : t("Drop photos here")}</p>
     <button class="ink" onclick={onchoose} disabled={isLoading}>
-      {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || "Opening…"}{:else}Open photos{/if}
+      {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || t("Opening…")}{:else}{t("Open photos")}{/if}
     </button>
-    {#if !bare}<button class="link" onclick={onsample} disabled={isLoading}>or try the sample</button>{/if}
+    {#if !bare}<button class="link" onclick={onsample} disabled={isLoading}>{t("or try the sample")}</button>{/if}
     <p class="mono">JPEG · PNG · HEIC · RAW</p>
   </div>
 {/snippet}
@@ -40,30 +41,36 @@
 <div class="contact">
   <section class="head">
     <div class="intro">
-      <h1>Frame your photos for the feed.</h1>
-      <p class="lead">Borders, captions with your camera details, and carousels, plus film looks if you want to edit. Pick a frame below, or start with a plain photo.</p>
-      <p class="mono">Runs in your browser · works offline · nothing uploaded</p>
+      <h1>{t("Frame your photos for the feed.")}</h1>
+      <p class="lead">{t("Borders, captions with your camera details, and carousels, plus film looks if you want to edit. Pick a frame below, or start with a plain photo.")}</p>
+      <p class="mono">{t("Runs in your browser · works offline · nothing uploaded")}</p>
     </div>
 
     {@render well()}
   </section>
 
-  <div class="rule mono"><span>One photo, seven frames</span><span>Tap a print to start with it</span></div>
+  <div class="rule mono"><span>{t("One photo, seven frames")}</span><span>{t("Tap a print to start with it")}</span></div>
 
   <div class="grid">
     {#each PRINTS as p, i (p.img)}
-      <button class="print" class:wide={p.wide} onclick={() => onpick(p.preset)} disabled={isLoading} aria-label="Start with {p.label}">
-        <span class="mono">{String(i + 1).padStart(2, "0")} {p.label}</span>
-        <img src="/landing/{p.img}.webp" width={p.w} height={p.h} alt={p.alt} loading="lazy" decoding="async" />
+      <button class="print" class:wide={p.wide} onclick={() => onpick(p.preset)} disabled={isLoading} aria-label={t("Start with {name}", { name: t(p.label) })}>
+        <span class="mono">{String(i + 1).padStart(2, "0")} {t(p.label)}</span>
+        <img src="/landing/{p.img}.webp" width={p.w} height={p.h} alt={t(p.alt)} loading="lazy" decoding="async" />
       </button>
     {/each}
   </div>
 
   <footer class="mono">
-    <span>Brand logos &amp; EXIF captions</span>
-    <span>Film looks · LUTs · recipes</span>
-    <span>Batch export</span>
-    <span>Location removed on export</span>
+    <span>{t("Brand logos & EXIF captions")}</span>
+    <span>{t("Film looks · LUTs · recipes")}</span>
+    <span>{t("Batch export")}</span>
+    <span>{t("Location removed on export")}</span>
+    <label class="lang">
+      <span class="sr-only">{t("Language")}</span>
+      <select value={i18n.lang} onchange={(e) => setLang(e.currentTarget.value)}>
+        {#each LANGUAGES as [id, name] (id)}<option value={id}>{name}</option>{/each}
+      </select>
+    </label>
   </footer>
 </div>
 {/if}
@@ -241,6 +248,19 @@
   .print:hover:not(:disabled) img { transform: translateY(-4px); }
   .print:hover .mono, .print:focus-visible .mono { color: var(--text); }
 
+  footer .lang {
+    margin-left: auto;
+  }
+  footer select {
+    min-height: 36px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    text-transform: none;
+  }
   footer {
     display: flex;
     flex-wrap: wrap;
