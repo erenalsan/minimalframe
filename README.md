@@ -1,224 +1,121 @@
-# MinimalFrame 🖼️
+# MinimalFrame
 
-> **Zero-bloat, 100% local, high-performance photo framing & darkroom PWA.**  
-> Give your photography clean gallery borders, rich analog effects, custom branding, and elegant camera EXIF typography — completely offline, directly in your browser or on Android.
+Frame your photos for Instagram and every other feed: clean borders, captions with your camera details, brand logos and seamless carousels, plus a film-style photo editor. Everything runs on your device, in the browser or as an installed app. Nothing is uploaded.
 
----
+[![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
+[![PWA](https://img.shields.io/badge/PWA-offline-5A0FC8)](#install-and-offline-use)
 
-[![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-blue.svg?style=for-the-badge)](https://github.com/rnlsn326/minimalframe)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-[![Framework: Svelte 5](https://img.shields.io/badge/Svelte-5.x%20Runes-FF3E00.svg?style=for-the-badge&logo=svelte&logoColor=white)](https://svelte.dev)
-[![Bundler: Vite](https://img.shields.io/badge/Vite-8.x-646CFF.svg?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev)
-[![Mobile: Capacitor](https://img.shields.io/badge/Capacitor-Android%20Ready-119EFF.svg?style=for-the-badge&logo=capacitor&logoColor=white)](https://capacitorjs.com)
+**Languages:** English · Türkçe · Deutsch
 
 ---
 
-## ⚡ Project Status: Ongoing Development (WIP)
+## What it does
 
-> [!NOTE]
-> **MinimalFrame is actively under continuous development.**  
-> Originally envisioned with a backend pipeline, V2 was rewritten to be **100% client-side (no Python / no server dependencies)** for privacy, zero latency, and seamless mobile compatibility via Capacitor Android. Features, performance tweaks, and camera RAW improvements are being added continuously.
+### Frame
+- **Ratios for each platform:** feed portrait (4:5), feed square, Story & Reel (9:16), print 3:2, wide 16:9, photo + caption, and an even border.
+- **Carousels:** one wide photo split into 2–10 seamless 4:5 or square slides, each saved at Instagram's full size. Drag the photo to choose which part fills the strip.
+- **Templates:** Gallery, Instant, Museum mat, Film border, Brand bar, Spread, Midnight and more. You can also save your own, and back up or import them as a file.
+- **Captions:** camera, lens, focal length, aperture, shutter, ISO, date and a note, read from the photo's EXIF data and editable per photo. Raw camera codes (ILCE-7RM4, XF35mmF2) become readable names.
+- **Caption layouts:** stacked, a brand bar with the real camera-maker logo, or one slim spread row.
+- **Colours:** quick picks, colours taken from the photo, automatic text contrast and saved colour pairs.
+- **Fonts:** eight bundled fonts that work offline, fonts from your computer, or your own font file.
+- **Your logo or signature** as a watermark, with corner presets, size and opacity.
 
----
+### Edit
+- **Looks:** one-tap film looks, an **Auto** look worked out for each photo, and your own saved looks.
+- **Fujifilm recipes:** paste a recipe's settings text and it's turned into a look.
+- **LUTs:** import `.cube` files and blend them with a strength slider.
+- **Match look:** makes one photo's brightness, white balance, contrast and colour follow another photo.
+- **Light and colour:** exposure, contrast, highlights, shadows, whites, blacks, temperature, tint, vibrance and saturation.
+- **Tone curve** per channel, and a **colour mixer** for the hue, saturation and luminance of each of eight colour bands.
+- **Detail:** clarity and sharpening. **Film:** grain and soft bloom.
+- **Crop:** free or fixed ratios, straighten, rotate and flip.
+- **GPU engine:** develops in WebGL2, so sliders update live. Exports are rendered again at full resolution.
 
-## ✨ Key Features
+### Files
+- **Formats:** JPEG, PNG, WebP, HEIC/HEIF, and RAW from Sony, Canon, Nikon, Fujifilm, Olympus, Panasonic, Pentax, Samsung and DNG. RAW is developed from the sensor data with LibRaw (WebAssembly).
+- **Batch:** open a whole shoot, tick the photos you want and export them together. Desktop gets one ZIP; phones and tablets get separate images straight into the gallery.
+- **Export:** Instagram size, 2K, 4K or full size, as JPEG, PNG or WebP, with an estimate of the file size. You can also share straight to Instagram and other apps.
+- **Privacy:** every export is saved without metadata, so no GPS location, serial numbers or camera data end up in the file.
 
-### 🔒 1. 100% Local & Privacy-First (Zero Bloat)
-- **No Cloud Uploads**: Your photos never leave your device. All rendering, EXIF extraction, and exports happen locally on your CPU/GPU.
-- **Offline Ready**: Built as a Progressive Web App (PWA) and packaged for mobile platforms (Android) using Capacitor.
-- **Zero Tracking**: No telemetry, no third-party analytics, and no accounts required.
+### Phone and tablet
+- **Gestures:** pinch or double-tap to zoom, swipe between photos, press and hold to see the original, pull the tool panel down to close it, double-tap a slider to reset it, and drag its number to fine-tune.
+- **Back gesture:** closes the open panel or sheet instead of leaving the app.
+- **Animations:** the photo area grows and shrinks with the tool panel. Frame and ratio changes morph from one to the next. After you crop, the view zooms in Lightroom-style to show the result.
+- **Smooth on big screens:** shadows, grain and bloom step aside while things move, which keeps large tablets fluid.
+- **Samsung Internet:** it allows only one download per tap, so there the remaining carousel slides are saved one tap at a time.
 
----
-
-### 🎨 2. Dual-Mode Creative Workflow
-Switch effortlessly between two focused environments:
-
-#### A. Photo Editor (Tone & Analog Lab)
-- **Exposure & Light Controls**:
-  - Exposure compensation: `-2.0 EV` to `+2.0 EV`
-  - Fine-grained Brightness, Contrast, and Saturation adjustments
-- **Analog & Film Simulation Engine**:
-  - **Film Grain**: Ultra-fast randomized monochrome grain engine powered by an inlined LCG PRNG algorithm designed to process 24MP+ frames without UI lag.
-  - **Soft Bloom / Black Mist**: Optical diffusion filter simulating CineBloom and Black Pro-Mist lenses with dynamic downsampled buffering.
-- **Instant Style Presets**:
-  - `RAW Fix` (Shadow lift and contrast normalization)
-  - `Vivid` (Punchy color saturation and clarity)
-  - `B&W Contrast` (Deep shadows with delicate analog grain)
-  - `Warm Film` (Golden-hour glow with soft bloom)
-  - `Moody` (Underexposed cinematic tones)
-
-#### B. Framing & EXIF Typography Mode
-- **Aspect Ratio Formatting**:
-  - `Original Frame` (Maintains source image geometry)
-  - `1:1 Square` (Classic feed / Exhibition)
-  - `4:5 Portrait` (Instagram feed standard)
-  - `9:16 Story` (TikTok / Reels / Mobile story)
-  - `16:9 Landscape` (Cinematic widescreen)
-  - `3:2 Print` (Traditional 35mm format)
-  - `Custom Manual` (Custom proportional bounds)
-- **Fine Padding Control**:
-  - Independent Horizontal and Vertical margin sliders (5% to 50%).
-- **Smart Color & Auto-Contrast**:
-  - Custom background color picker & direct Hex input.
-  - Real-time perceptual luminance calculation to automatically adjust text to black or white for optimal readability.
-  - Save custom background/text palette combinations to LocalStorage.
+### Your work is kept
+Open photos come back after a reload, or after Android closes the app in the background: originals, edits, crops, captions, the frame settings and the selected photo. They're stored only on the device, and removing a photo deletes its stored copy too.
 
 ---
 
-### 📷 3. Camera EXIF Typography & Branding
-- **Automated Metadata Extraction**:
-  - Seamlessly parses Camera Make & Model, Lens Model, Focal Length, Aperture, Shutter Speed, and ISO using `exifr`.
-- **Granular Display Toggles**:
-  - Selectively hide or show any individual EXIF parameter.
-- **Editable Metadata Overrides**:
-  - Manually modify camera details, lens names, or exposure numbers per photo (perfect for vintage manual glass or unrecorded shot info).
-- **Dynamic & Safe Placement**:
-  - Non-overlapping layout math guarantees captions stay strictly within the margin zone — never obscuring your photograph.
-  - Position presets (Top or Bottom zone) + precise horizontal and vertical offset sliders.
-- **Custom Font Selection**:
-  - Curated typography: *Inter, System UI, Playfair Display (Classic Editorial), JetBrains Mono, Sans-Serif, Serif, Impact, and Courier New*.
-  - Auto-calculated proportional font scaling or direct manual font sizing override.
-- **Personal Logo & Watermark**:
-  - Import custom transparent PNG or SVG logos.
-  - Adjustable scale (3% - 45%), opacity, and 1-click anchor presets (Corners & Center).
+## Install and offline use
+
+MinimalFrame is a Progressive Web App. Open it in Chrome or Samsung Internet and choose **Install** (or **Add to Home screen**). It then opens like an app and works offline. Photos shared from the gallery's share menu open directly in MinimalFrame.
+
+The Android app for the Play Store is planned: either a Trusted Web Activity (a small Android shell around this web app) or Capacitor.
 
 ---
 
-### 🚀 4. Batch Processing & Full-Res Multi-File Support
-- **Multi-File Drag & Drop**:
-  - Drop dozens of images at once; inspect and select through the interactive bottom filmstrip.
-- **Dual-Resolution Performance Pipeline**:
-  - **Proxy Canvas (Live View)**: Real-time UI rendering is strictly capped at a 1080p proxy canvas, providing 60 FPS fluidity on laptops and smartphones.
-  - **Full-Resolution Export (24MP+)**: Full-resolution pixel pipelines and analog effects run strictly during export, delivering print-ready output without freezing the UI.
-- **Batch ZIP Export**:
-  - Export all loaded photos framed and rendered in full resolution into a single `.zip` archive via `JSZip` with an active progress indicator.
-- **Single File JPEG Export**:
-  - Configurable JPEG quality selector (`50%` to `100%`).
-  - Mobile-tested download triggers compliant with Chrome Android and web sandboxes.
+## Development
 
----
-
-### 🎞️ 5. RAW Image Engine (Phase 1)
-- Built-in detection and parsing for modern and legacy RAW formats:
-  - **Sony** (`.arw`)
-  - **Canon** (`.cr2`, `.cr3`)
-  - **Nikon** (`.nef`)
-  - **Adobe / Leica** (`.dng`)
-  - **Fujifilm** (`.raf`)
-  - **Olympus** (`.orf`)
-  - **Panasonic** (`.rw2`)
-  - **Pentax** (`.pef`)
-  - **Samsung** (`.srw`)
-- **Embedded Full-Res Stream Extraction**:
-  - Scans RAW binary buffers for highest-resolution embedded preview streams to avoid low-resolution thumbnail pitfalls.
-  - Reads embedded EXIF orientation tags for automatic upright orientation.
-- **Pluggable WebAssembly Architecture**:
-  - Modular API hooks (`initRawWasm`, `registerWasmDecoder`) ready for full WebAssembly demosaicing engines (e.g. dcraw or LibRaw Wasm).
-
----
-
-### 💾 6. Presets & Local Templates
-- **Built-in Curated Presets**:
-  - *Minimal Gallery*, *Editorial Dark*, *Square Exhibition*, and *Analog Cine 16:9*.
-- **Save Custom Presets**:
-  - Save your custom margin dimensions, colors, font choices, and watermark configurations for one-click reuse via LocalStorage.
-
----
-
-## 🛠️ Technology Stack
-
-| Layer | Technology |
-|---|---|
-| **UI Framework** | [Svelte 5](https://svelte.dev) (Runes: `$state`, `$derived`, `$effect`, `$state.raw`) |
-| **Build Tool** | [Vite 8](https://vitejs.dev) |
-| **Mobile Runtime** | [Capacitor 8](https://capacitorjs.com) (Android / Cross-platform) |
-| **Metadata Parsing** | [exifr](https://github.com/MikeKovarik/exifr) |
-| **Archive Packaging** | [JSZip](https://stuk.github.io/jszip/) |
-| **Graphics Engine** | HTML5 Canvas 2D with custom pixel PRNG & computational shaders |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher recommended)
-- `npm` or `pnpm` / `yarn`
-
-### Installation
+Requires [Node.js](https://nodejs.org/) 20 or newer.
 
 ```bash
-# Clone the repository
-git clone https://github.com/rnlsn326/minimalframe.git
-
-# Navigate into the project folder
+git clone https://github.com/erenalsan/minimalframe.git
 cd minimalframe
-
-# Install dependencies
 npm install
+npm run dev        # http://localhost:5173
 ```
 
-### Running Locally
+| Command | What it does |
+|---|---|
+| `npm run dev` | Development server with hot reload |
+| `npm run build` | Production build into `dist/`, including the offline service worker |
+| `npm run preview` | Serves the production build locally |
+| `npm test` | Unit tests: frame layout, geometry, colour, LUTs, recipes, EXIF names, brand logos, zoom, translations |
 
-```bash
-# Start Vite development server
-npm run dev
+To check frame rates on a real device, open the app with `?fps` at the end of the address. A small meter shows frames per second and late frames.
+
+### Project layout
+
+```
+src/
+  App.svelte              workbench: state, rendering, gestures, export
+  components/             landing page, export sheet, photos tray, save dialog
+  components/tools/       one component per tool panel
+  lib/                    pure logic and engines (each with a *.test.js where it matters)
+    frameLayout.js        border, caption and carousel layout, shared by preview and export
+    developEngine.js      WebGL2 develop engine
+    rawEngine.js          LibRaw (WebAssembly) RAW decoding
+    i18n.svelte.js        interface language; locales/ holds Turkish and German
+    store.js              IndexedDB storage for fonts, LUTs and the last session
+public/                   icons, brand logos, landing images, share-target worker
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+### Translations
 
-### Building for Production
-
-```bash
-# Compile and optimize for web/PWA
-npm run build
-
-# Preview production build locally
-npm run preview
-```
+The English text is the key: `t("Export")` gives the Turkish or German version from `src/lib/locales/`, and falls back to English if one is missing. `npm test` fails if any text in the app lacks a Turkish or German version, or if the `{placeholders}` differ. To add a language, add a locale file and an entry in `LANGUAGES` in `i18n.svelte.js`.
 
 ---
 
-## 📱 Mobile & Android Setup (Capacitor)
+## Stack
 
-MinimalFrame is configured to run as a native mobile application using Capacitor:
-
-```bash
-# Build the production web assets
-npm run build
-
-# Sync web assets to Android
-npx cap sync android
-
-# Open project in Android Studio
-npx cap open android
-```
+| | |
+|---|---|
+| Interface | [Svelte 5](https://svelte.dev) (runes) |
+| Build | [Vite 8](https://vitejs.dev), [vite-plugin-pwa](https://vite-pwa-org.netlify.app) |
+| Image engine | WebGL2 shaders, Canvas 2D |
+| RAW | [libraw-wasm](https://www.npmjs.com/package/libraw-wasm) |
+| HEIC | [libheif-js](https://www.npmjs.com/package/libheif-js) (LGPL-3.0, see `public/licenses/`) |
+| EXIF | [exifr](https://github.com/MikeKovarik/exifr) |
+| ZIP | [JSZip](https://stuk.github.io/jszip/) |
+| Fonts | [Fontsource](https://fontsource.org) (bundled, offline) |
 
 ---
 
-## 🗺️ Development Roadmap
+## Licence
 
-MinimalFrame is an active, evolving project. Here is what is currently planned:
-
-- [x] **V2 Architecture**: 100% Client-side migration (removed Python backend).
-- [x] Svelte 5 runes migration & reactive state architecture.
-- [x] Multi-file batch processing & ZIP bundle export.
-- [x] Analog effects engine (monochrome film grain & soft bloom diffusion).
-- [x] Watermark / Personal logo integration with anchor presets.
-- [x] Editable EXIF metadata overrides.
-- [ ] **Wasm Full RAW Debayering**: Integrating LibRaw / dcraw compiled to WebAssembly for direct sensor Bayer-pattern decoding.
-- [ ] **Custom TTF/WOFF2 Font Uploads**: Allow users to drag-and-drop custom font files.
-- [ ] **Custom 3D LUT Support**: Import `.cube` lookup tables for analog film color grading.
-- [ ] **Native Android APK Releases**: Pre-built Android APK downloads in GitHub Releases.
-
----
-
-## 🤝 Contributing
-
-Contributions, feature requests, and feedback are welcome!
-Feel free to open an [Issue](https://github.com/rnlsn326/minimalframe/issues) or submit a Pull Request.
-
----
-
-## 📄 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
+No licence has been chosen for MinimalFrame itself yet. Third-party licences are in `public/licenses/`.
