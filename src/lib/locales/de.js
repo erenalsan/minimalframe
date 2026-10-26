@@ -12,6 +12,7 @@ export default {
   "Saved {n} of {total}. Tap Save for the next one.": "{n} von {total} gespeichert. Tippe auf Speichern für das nächste.",
   "Saved all {n} images": "Alle {n} Bilder gespeichert",
   "Exporting…": "Wird exportiert …",
+  "Saved to your gallery": "In deiner Galerie gespeichert",
   "Saved {name}": "{name} gespeichert",
   "Saved {n} slides": "{n} Slides gespeichert",
   "Saved {n} slides to {name}": "{n} Slides in {name} gespeichert",

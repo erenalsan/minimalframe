@@ -48,6 +48,7 @@
   } from "./lib/geometry.js";
   import { idbGet, idbSet, idbDel, idbKeys } from "./lib/store.js";
   import { t, i18n } from "./lib/i18n.svelte.js";
+  import { Capacitor, registerPlugin } from "@capacitor/core";
   import { zoomAt, clampPan, NO_ZOOM, MAX_ZOOM } from "./lib/zoom.js";
   import {
     getContrastingColor,
@@ -1971,7 +1972,17 @@
 
   // Phones and tablets save every photo/slide as its own image (it lands in the gallery straight away);
   // desktop gets one ZIP, which is tidier in a downloads folder.
-  const savesSeparately = matchMedia("(pointer: coarse)").matches;
+  // The Android app saves each one straight into the gallery's "MinimalFrame" album (GalleryPlugin.java).
+  const isApp = Capacitor.isNativePlatform();
+  const Gallery = registerPlugin("Gallery");
+  const savesSeparately = isApp || matchMedia("(pointer: coarse)").matches;
+  const base64 = (blob) =>
+    new Promise((ok, fail) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result).split(",")[1]);
+      r.onerror = () => fail(r.error);
+      r.readAsDataURL(blob);
+    });
   // Samsung Internet keeps only the first of several downloads started without a tap, so there the rest
   // wait for one tap each (Save image 2 of 3…). Chrome and others save them all at once.
   // shortcut: detects Samsung Internet by name; add other browsers here if they turn out to block too.
@@ -1990,6 +2001,10 @@
 
   async function saveFiles(files, zipName) {
     saveQueue = null;
+    if (isApp) {
+      for (const f of files) await Gallery.save({ data: await base64(f.blob), name: f.name, mime: f.blob.type || "image/jpeg" });
+      return;
+    }
     if (files.length === 1) return triggerDownload(files[0].blob, files[0].name);
     if (!savesSeparately) return triggerDownload(await zipFiles(files), zipName);
     if (oneSavePerTap) {
@@ -2022,7 +2037,9 @@
       const name = `${cleanName(activeItem.name, "photo")}_carousel.zip`;
       await saveFiles(files, name);
       if (!saveQueue) flashStatus(
-        files.length === 1
+        isApp
+          ? t("Saved to your gallery")
+          : files.length === 1
           ? t("Saved {name}", { name: files[0].name })
           : savesSeparately
             ? t("Saved {n} slides", { n: files.length })
@@ -2103,7 +2120,13 @@
       const name = `MinimalFrame_${new Date().toISOString().slice(0, 10)}_${total}photos.zip`;
       await saveFiles(files, name);
       if (!saveQueue)
-        flashStatus(savesSeparately ? t("Saved {n} images", { n: files.length }) : t("Saved {n} photos to {name}", { n: total, name }));
+        flashStatus(
+          isApp
+            ? t("Saved to your gallery")
+            : savesSeparately
+              ? t("Saved {n} images", { n: files.length })
+              : t("Saved {n} photos to {name}", { n: total, name }),
+        );
     } catch (err) {
       console.error("[MinimalFrame] Batch export error:", err);
       loadError = t("Batch export failed: {error}", { error: err.message });

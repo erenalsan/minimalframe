@@ -11,6 +11,7 @@ export default {
   "Saved {n} of {total}. Tap Save for the next one.": "{total} görselden {n}. kaydedildi. Sıradaki için Kaydet'e dokun.",
   "Saved all {n} images": "{n} görselin hepsi kaydedildi",
   "Exporting…": "Dışa aktarılıyor…",
+  "Saved to your gallery": "Galerine kaydedildi",
   "Saved {name}": "{name} kaydedildi",
   "Saved {n} slides": "{n} slayt kaydedildi",
   "Saved {n} slides to {name}": "{n} slayt {name} dosyasına kaydedildi",
