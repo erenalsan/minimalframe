@@ -55,7 +55,7 @@
     color: var(--muted);
   }
   .on {
-    color: var(--accent-ink, var(--accent));
+    color: var(--warn);
     font-weight: 600;
   }
 </style>

@@ -37,6 +37,7 @@
   import { cleanCamera, cleanLens } from "./lib/exifCleaner.js";
   import { brandMark } from "./lib/brandLogos.js";
   import { computeFrameLayout, autoBorderAxis } from "./lib/frameLayout.js";
+  import { filmLayout, drawFilm } from "./lib/film.js";
   import {
     CROP_DEFAULT,
     applyGeometry,
@@ -48,14 +49,19 @@
   } from "./lib/geometry.js";
   import { idbGet, idbSet, idbDel, idbKeys } from "./lib/store.js";
   import { withExif } from "./lib/exifWriter.js";
+  import { recipeFromPhoto } from "./lib/fujiRecipe.js";
+  import { openRecipe } from "./components/tools/LooksTool.svelte";
   import { t, i18n } from "./lib/i18n.svelte.js";
   import { Capacitor, registerPlugin } from "@capacitor/core";
+  import { Share } from "@capacitor/share";
+  import { Filesystem, Directory } from "@capacitor/filesystem";
   import { zoomAt, clampPan, NO_ZOOM, MAX_ZOOM } from "./lib/zoom.js";
   import {
     getContrastingColor,
     applyExifOrientation,
     createProxyPreview,
     decodeUpright,
+    decodeProxy,
     photoPalette,
     createThumbnail,
     fmtExposure,
@@ -105,7 +111,7 @@
   // "editor" = Edit mode (light, colour, looks…), "framing" = Frame mode (ratio, border, caption…)
   let activeTab = $state("framing");
 
-  let activeTool = $state({ editor: "looks", framing: "ratio" });
+  let activeTool = $state({ editor: "looks", framing: "templates" }); // framing starts at the frames themselves
   // Compact layout (phones, portrait tablets): the photo fills the screen, the tool row sits at the bottom and a
   // tool opens in a small tray above it, closed with Done. Same query as the compact CSS block below.
   const COMPACT = "(max-width: 899px) and (min-height: 501px)";
@@ -627,6 +633,13 @@
     logoOpacity: 85, // 5% - 100%
     logoPosX: 92, // 0% - 100%
     logoPosY: 93, // 0% - 100%
+    filmStyle: null, // a real film border (film.js): "35mm" | "instant" | "darkroom" | "slide"
+    filmName: "SAFETY FILM 400", // 35 mm: printed along the edge
+    filmFrame: 12, // frame number of the first photo; the next photos count up
+    filmInk: "#f2a23c", // 35 mm edge print colour
+    filmCard: "#f7f6f1", // instant card / slide mount
+    filmNeighbours: true, // 35 mm: the edges of your other photos at the strip's ends
+    filmDate: false, // the orange date stamp of a compact camera
     exifDisplay: {
       date: false,
       note: true, // empty unless typed, so it only shows when you add one
@@ -642,8 +655,13 @@
   const ratio = $derived(frameRatio(frame));
   const slices = $derived(ratio?.slices ?? 1);
   // In a fixed ratio one border is filled by the ratio itself, so only the other slider is shown.
+  // A 35 mm strip runs off the frame along its length, so only the space beside it is set.
+  // shortcut: a sideways strip on a taller shape (4:5) gets its top and bottom from the shape, so that slider does
+  // nothing there; hide it too if anyone notices.
   const autoAxis = $derived(slices > 1 ? "v" :
-    processedImage
+    processedImage && frame.filmStyle === "35mm" && ratio?.w
+      ? processedImage.width >= processedImage.height ? "h" : "v"
+      : processedImage
       ? autoBorderAxis(
           processedImage.width,
           processedImage.height,
@@ -661,6 +679,10 @@
       document.fonts.load(`400 40px ${css}`),
       document.fonts.load(`600 40px ${css}`),
     ]).then(() => scheduleRender());
+  });
+  $effect(() => {
+    if (frame.filmStyle || frame.filmDate)
+      Promise.all(['700 40px "Space Mono"', 'condensed 700 40px "Archivo Variable"'].map((f) => document.fonts.load(f))).then(() => scheduleRender());
   });
 
   // ─── Logo / watermark ──────────────────────────────────────────────────────
@@ -784,10 +806,9 @@
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: "application/json",
     });
-    triggerDownload(
-      blob,
-      `MinimalFrame_library_${new Date().toISOString().slice(0, 10)}.json`,
-    );
+    const name = `MinimalFrame_library_${new Date().toISOString().slice(0, 10)}.json`;
+    if (isApp) shareInApp([{ name, blob }]).catch((err) => (libraryMessage = err.message));
+    else triggerDownload(blob, name);
   }
 
   let libraryMessage = $state("");
@@ -832,6 +853,7 @@
     for (const k of Object.keys(frame))
       if (k !== "exifDisplay" && p[k] !== undefined) frame[k] = p[k];
     frame.captionSpace = p.captionSpace ?? 12; // older templates have none
+    frame.filmStyle = p.filmStyle ?? null; // every other template is a plain frame
     frame.captionStyle = ["bar", "spread"].includes(p.captionStyle) ? p.captionStyle : "stack";
     // Templates from before the flexible carousel had fixed 2- and 3-slide ratios.
     const oldCarousel = /^carousel(\d)$/.exec(p.selectedRatioId ?? "");
@@ -955,12 +977,44 @@
 
   onMount(() => {
     const shared = new URLSearchParams(location.search).has("shared");
-    restoreSession().then(() => shared && loadSharedFiles());
+    restoreSession().then(() => {
+      if (shared) loadSharedFiles();
+      if (isApp) openIncoming();
+    });
     if (new URLSearchParams(location.search).has("fps")) import("./lib/fpsMeter.js").then((m) => m.startFpsMeter()); // testing on real devices
     loadPresets();
     // Canvas text can't swap fonts by itself; redraw once the bundled caption font is ready.
     document.fonts?.ready.then(() => scheduleRender());
   });
+
+  // Android app: photos shared to MinimalFrame or opened with it (IncomingPlugin.java) open like dropped files,
+  // at launch and while the app is running.
+  async function openIncoming() {
+    const Incoming = registerPlugin("Incoming");
+    const open = async ({ files, text }) => {
+      if (text) showRecipe(text);
+      if (!files?.length) return;
+      try {
+        const list = await Promise.all(
+          files.map(async (f) => new File([await (await fetch(Capacitor.convertFileSrc(f.path))).blob()], f.name, { type: f.mime || "" })),
+        );
+        await loadFiles(list);
+      } catch (err) {
+        loadError = t("Could not open the shared photos: {error}", { error: err.message });
+      }
+    };
+    Incoming.addListener("files", open);
+    open(await Incoming.take());
+  }
+
+  // A recipe shared to MinimalFrame as text: the Fujifilm recipe dialog opens with it, ready to apply.
+  function showRecipe(text) {
+    openRecipe(text);
+    activeTab = "editor";
+    activeTool.editor = "looks";
+    if (compact) openTray();
+    if (!activeItem) loadError = t("Open a photo, then apply the recipe from Looks.");
+  }
 
   // Photos sent with "Share to MinimalFrame" wait in a cache the service worker filled; open them once.
   async function loadSharedFiles() {
@@ -1169,10 +1223,21 @@
     } catch (err) {
       console.warn("[MinimalFrame] Could not restore the last session:", err);
     } finally {
+      // The landing page introduces the app once. After the first photo, a launch with nothing open goes
+      // straight to the workbench: people coming back want to start, not read the introduction again.
+      if (!started && seenBefore()) started = true;
       sessionChecked = true;
       sessionReady = true;
     }
   }
+  const SEEN_KEY = "mf_seen_v1";
+  const seenBefore = () => {
+    try {
+      return localStorage.getItem(SEEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  };
   function saveSessionNow() {
     clearTimeout(sessionTimer);
     if (pendingSession) idbSet(SESSION_KEY, pendingSession);
@@ -1290,14 +1355,14 @@
           }
 
           // Decode once, keep only a ≤1080px proxy. The full-res source is re-decoded from sourceBlob at export.
-          const bitmap = await decodeUpright(sourceBlob);
+          const { bitmap, w, h } = await decodeProxy(sourceBlob, 1080);
           previewImage = applyExifOrientation(
             createProxyPreview(bitmap, 1080),
             orientationTag,
           );
           const isRotated90 = orientationTag >= 5;
-          fullW = isRotated90 ? bitmap.height : bitmap.width;
-          fullH = isRotated90 ? bitmap.width : bitmap.height;
+          fullW = isRotated90 ? h : w;
+          fullH = isRotated90 ? w : h;
           bitmap.close();
           thumbSource = previewImage;
           small = document.createElement("canvas");
@@ -1355,6 +1420,7 @@
           rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
           selected: true, // included in batch export
           hadGps: rawExif?.GPSLatitude != null || rawExif?.latitude != null, // exports never contain it
+          fujiRecipe: /fujifilm/i.test(rawExif?.Make ?? "") ? await recipeFromPhoto(arrayBuffer) : null, // the camera's saved recipe
           // the camera's own values, for exports that keep camera info (see exifWriter.js)
           camera: {
             make: rawExif?.Make,
@@ -1382,7 +1448,7 @@
           },
         });
       } catch (err) {
-        console.error(`[MinimalFrame] Failed to load ${file.name}:`, err);
+        console.error(`[MinimalFrame] Failed to load ${file.name}: ${err?.name}: ${err?.message}`, err);
         loadError = t("Could not load {name}: {error}", { name: file.name, error: err.message });
       }
     }
@@ -1393,10 +1459,18 @@
       else for (const item of newItems) idbSet(fileKey(item.id), item.file); // kept for the next launch
       filesList = [...filesList, ...newItems];
       started = true;
+      try {
+        localStorage.setItem(SEEN_KEY, "1");
+      } catch {}
       activeImageIndex = startIndex; // Switch to first newly added photo
 
       if (hasRaw) {
         activeTab = "editor";
+      } else if (startIndex === 0 && !saved && !startPreset) {
+        // first photos of a session: the next step is picking a frame, so the frames are already on screen
+        activeTab = "framing";
+        activeTool.framing = "templates";
+        if (compact) openTray();
       }
 
       await tick();
@@ -1597,18 +1671,61 @@
     (allFonts().find((f) => f.id === frame.selectedFontId) || SYSTEM_FONTS[0])
       .css;
 
+  // ─── Film borders (film.js) ────────────────────────────────────────────────
+  // The film object (strip, print or slide with the photo in it) takes the photo's place in the layout.
+  const NOTE_STYLES = ["instant", "slide"]; // the caption is handwritten on the card instead of under it
+  const filmCanvas = document.createElement("canvas"); // the preview's film object, reused between redraws
+
+  // The handwritten line on an instant print or slide: your note or the date, else the camera.
+  function filmNote(item) {
+    if (!frame.showExif) return "";
+    const lines = buildExifLines(item?.exifOverride, frame.exifDisplay);
+    return (lines.find((l) => l.type === "extra") ?? lines.find((l) => l.type === "model"))?.text ?? "";
+  }
+
+  function filmObject(photo, film, item, reuse) {
+    const c = reuse ? filmCanvas : document.createElement("canvas");
+    c.width = film.w; // (also clears it)
+    c.height = film.h;
+    const i = filesList.indexOf(item);
+    // shortcut: neighbours are the other photos' previews, without their edits or crop; fine for a 3 mm sliver.
+    const near = (k) => {
+      const img = filesList[i + k]?.previewImage;
+      return frame.filmNeighbours && i >= 0 && img instanceof HTMLCanvasElement ? img : null;
+    };
+    const taken = item?.camera?.taken;
+    const yy = taken ? String(taken.getFullYear()).slice(2) : "";
+    drawFilm(c.getContext("2d"), photo, film, {
+      ink: frame.filmInk,
+      card: frame.filmCard,
+      name: frame.filmName,
+      n: frame.filmFrame + Math.max(0, i),
+      prev: near(-1),
+      next: near(1),
+      stamp: frame.filmDate && taken ? `'${yy} ${taken.getMonth() + 1} ${taken.getDate()}` : "",
+      month: taken ? `${taken.toLocaleDateString(i18n.lang, { month: "short" }).toUpperCase().replace(".", "")} · ${yy}` : "",
+      note: filmNote(item),
+      font: captionFamily(),
+    });
+    return c;
+  }
+
   // item: the photo (its caption text, and for carousels which part of it fills the strip).
   function layoutFrame(srcW, srcH, item) {
     const exifOverride = item?.exifOverride;
-    return computeFrameLayout(
-      srcW,
-      srcH,
-      frame.showExif && exifOverride
-        ? buildExifLines(exifOverride, frame.exifDisplay)
-        : [],
+    const lines = frame.showExif && exifOverride && !NOTE_STYLES.includes(frame.filmStyle)
+      ? buildExifLines(exifOverride, frame.exifDisplay)
+      : [];
+    // In a fixed shape a 35 mm strip runs off the frame at both ends; the border is the space beside it.
+    let film = filmLayout(frame.filmStyle, srcW, srcH);
+    const strip = film?.style === "35mm" && ratio?.w && slices === 1;
+    const run = () => computeFrameLayout(
+      film?.w ?? srcW,
+      film?.h ?? srcH,
+      lines,
       {
-        marginH: frame.customMarginH,
-        marginV: frame.customMarginV,
+        marginH: strip && film.land ? 0 : frame.customMarginH,
+        marginV: strip && !film.land ? 0 : frame.customMarginV,
         ratioId: frame.selectedRatioId,
         ratio,
         fill: slices > 1,
@@ -1630,6 +1747,23 @@
         },
       },
     );
+    let L = run();
+    if (strip) {
+      // Make the strip long enough to reach the frame's edges (more of the frames before and after shows),
+      // leaving the border beside it: sideways, the room the ratio left at the ends; upright, the height that
+      // gives the side border asked for (the caption keeps its space below).
+      let more = L.imgX;
+      if (!film.land) {
+        const free = frame.textZone === "top" ? L.canvasH - L.imgY - film.h : L.imgY;
+        const band = L.canvasH - film.h - 2 * free;
+        more = ((film.w * (1 + frame.customMarginH / 50)) / (ratio.w / ratio.h) - band - film.h) / 2;
+      }
+      if (more > 1) {
+        film = filmLayout("35mm", srcW, srcH, more);
+        L = run();
+      }
+    }
+    return film ? { ...L, film } : L;
   }
 
   // Caption fonts come in character subsets (Latin, Latin Extended…) that the browser fetches only when a
@@ -1694,9 +1828,11 @@
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = frame.backgroundColor;
     ctx.fillRect(0, 0, L.canvasW, L.canvasH);
+    const src = L.film ? filmObject(photo, L.film, item, canvas === canvasEl) : photo;
     // Carousels fill the whole strip: the layout says which part of the photo to draw (L.crop).
-    const { sx, sy, sw, sh } = L.crop ?? { sx: 0, sy: 0, sw: photo.width, sh: photo.height };
-    ctx.drawImage(photo, sx, sy, sw, sh, L.imgX, L.imgY, sw, sh);
+    const { sx, sy, sw, sh } = L.crop ?? { sx: 0, sy: 0, sw: src.width, sh: src.height };
+    ctx.drawImage(src, sx, sy, sw, sh, L.imgX, L.imgY, sw, sh);
+    if (src !== photo && src !== filmCanvas) src.width = src.height = 0; // export: free it now
     if (L.caption?.style === "spread") {
       const c = L.caption;
       const fam = captionFamily();
@@ -2070,7 +2206,7 @@
 
   // Native share sheet (Android/iOS browsers, installed PWA): sends the photo straight to Instagram & co.
   const canShareFiles =
-    typeof navigator !== "undefined" &&
+    isApp ||
     Boolean(
       navigator.canShare?.({
         files: [new File([""], "x.jpg", { type: "image/jpeg" })],
@@ -2078,7 +2214,25 @@
     );
   let pendingShare = $state.raw(null); // files ready but the browser wants a fresh tap to share them
 
+  // The Android app shares through Android's own share menu: the files go to the app's cache first.
+  let sharedThisLaunch = false; // the share folder exists; earlier launches' files are cleared at start (IncomingPlugin)
+  async function shareInApp(files) {
+    if (sharedThisLaunch) await Filesystem.rmdir({ path: "share", directory: Directory.Cache, recursive: true }).catch(() => {});
+    sharedThisLaunch = true;
+    const uris = [];
+    for (const f of files) {
+      const { uri } = await Filesystem.writeFile({ path: `share/${f.name}`, data: await base64(f.blob), directory: Directory.Cache, recursive: true });
+      uris.push(uri);
+    }
+    try {
+      await Share.share({ files: uris, dialogTitle: t("Share to…") });
+    } catch (err) {
+      if (!/cancel/i.test(err?.message ?? "")) throw err; // closed the share menu
+    }
+  }
+
   async function shareFiles(files) {
+    if (isApp) return shareInApp(files);
     try {
       await navigator.share({
         files: files.map(
@@ -2311,7 +2465,7 @@
         {#if activeItem.rawBadge}<span class="pill">RAW</span>{/if}
       </p>
     {/if}
-    {#if processedImage}
+    {#if processedImage && (edited || showOriginal)}
       <button
         class="hold"
         class:on={showOriginal}
@@ -2426,7 +2580,7 @@
           {#if activeTab === "editor" && activeItem && !(compact && trayView === "photos")}
             <button class="btn ghost revert" onclick={revertPhoto} disabled={!edited} title={t("Remove every edit and the crop from this photo")}>{t("Revert")}</button>
           {/if}
-          <button class="btn accent done" onclick={closeTray}>{t("Done")}</button>
+          <button class="btn ink done" onclick={closeTray}>{t("Done")}</button>
         </div>
       </div>
 
@@ -2487,6 +2641,8 @@
           {@const tool = activeTool.framing}
           {#if tool === "templates"}
             <TemplatesTool
+              bind:frame={() => frame, keep}
+              index={activeImageIndex}
               {userPresets}
               hasLooks={userLooks.length > 0}
               {libraryMessage}
@@ -2686,7 +2842,7 @@
     display: block;
   }
   .photos-btn.on {
-    border-color: var(--accent);
+    border-color: var(--text);
   }
   .photos-btn .count {
     position: absolute;
@@ -3061,7 +3217,7 @@
     bottom: 12px;
     width: 3px;
     border-radius: 0 3px 3px 0;
-    background: var(--accent);
+    background: var(--text);
   }
   .tab[aria-pressed="true"] :global(svg) {
     color: var(--accent-ink);
@@ -3159,9 +3315,9 @@
     height: 16px;
   }
   .hold.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #1a1204;
+    background: var(--text);
+    border-color: var(--text);
+    color: var(--bg);
   }
 
   /* ── Bar buttons ───────────────────────────────────────────────────────── */

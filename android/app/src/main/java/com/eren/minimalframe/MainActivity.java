@@ -7,6 +7,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(GalleryPlugin.class); // our own plugins register before the bridge starts
+        registerPlugin(IncomingPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

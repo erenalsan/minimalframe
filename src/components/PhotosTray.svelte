@@ -80,7 +80,7 @@
     display: block;
   }
   .photo.active .pick {
-    outline: 2.5px solid var(--accent);
+    outline: 2.5px solid var(--text);
     outline-offset: 2px;
   }
   .raw {

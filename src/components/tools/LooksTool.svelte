@@ -5,6 +5,7 @@
   import { DEV_DEFAULTS, freshDev, develop, cssFilterFor } from "../../lib/developEngine.js";
   import { LOOKS } from "../../lib/catalog.js";
   import { parseRecipe } from "../../lib/recipes.js";
+  import { recipeFromPhoto } from "../../lib/fujiRecipe.js";
   import { imageStats, matchLook, autoTarget } from "../../lib/matchLook.js";
   import { lutLib, importLutFiles, deleteLut } from "../../lib/lutLibrary.svelte.js";
 
@@ -21,6 +22,26 @@
   } = $props();
 
   let recipeDialog = $state.raw(null);
+  // shared text (openRecipe) opens the dialog as soon as the Looks tool is on screen
+  $effect(() => {
+    if (ui.open && recipeDialog) {
+      ui.open = false;
+      recipeDialog.showModal();
+    }
+  });
+  function useRecipeText(text) {
+    ui.recipeText = text;
+    ui.recipeNote = "";
+    ui.recipeApplied = false;
+  }
+  async function recipeFromFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const text = await recipeFromPhoto(file);
+    if (text) useRecipeText(text);
+    else ui.recipeNote = t("No Fujifilm recipe found in this photo.");
+  }
 
   // Copies (never shares) the look's nested curve and mixer, so later edits don't change the look itself.
   const applyLook = (l) => Object.assign(dev, freshDev(), JSON.parse(JSON.stringify(l.params)));
@@ -150,7 +171,11 @@
 
 <script module>
   // Survives switching tools, like the rest of the panel.
-  const ui = $state({ recipeText: "", recipeNote: "", recipeName: "", recipeApplied: false });
+  const ui = $state({ recipeText: "", recipeNote: "", recipeName: "", recipeApplied: false, open: false });
+  /** A recipe from elsewhere (shared text): fills the dialog and opens it when the Looks tool shows. */
+  export function openRecipe(text) {
+    Object.assign(ui, { recipeText: text, recipeNote: "", recipeApplied: false, open: true });
+  }
   // Rendered thumbnails per photo (its 160px proxy) → { params JSON or "auto" → image }; gone with the photo.
   const thumbCache = new WeakMap();
 </script>
@@ -240,6 +265,15 @@
       <button class="close" onclick={() => recipeDialog.close()} aria-label={t("Close")}>×</button>
     </div>
     <p class="hint" role="note">{t("Paste a recipe's settings, one per line. It becomes a look you can save.")}</p>
+    <div class="row-btns">
+      {#if item?.fujiRecipe}
+        <button class="btn ghost" onclick={() => useRecipeText(item.fujiRecipe)}>{t("Use this photo's recipe")}</button>
+      {/if}
+      <label class="btn ghost">
+        {t("From a Fujifilm photo…")}
+        <input type="file" accept="image/jpeg,.jpg,.jpeg" class="sr-only" onchange={recipeFromFile} />
+      </label>
+    </div>
     <textarea
       class="text"
       rows="7"

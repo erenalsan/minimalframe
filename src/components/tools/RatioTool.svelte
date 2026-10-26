@@ -59,29 +59,6 @@
     justify-content: space-between;
     gap: 12px;
   }
-  .stepper {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .stepper .label {
-    margin-right: 6px;
-  }
-  .stepper button {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--field);
-    font-size: 1.2rem;
-    line-height: 1;
-  }
-  .stepper output {
-    min-width: 2ch;
-    text-align: center;
-    font-size: 1.1rem;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
   /* Ratios */
   .ratios {
     display: grid;

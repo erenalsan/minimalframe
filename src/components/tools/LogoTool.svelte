@@ -147,7 +147,7 @@
     object-fit: contain;
   }
   .logo-pick[aria-pressed="true"] {
-    border-color: var(--accent);
+    border-color: var(--text);
   }
   .logo-add {
     border: 1.5px dashed color-mix(in srgb, var(--text) 30%, transparent);

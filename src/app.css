@@ -2,7 +2,8 @@
  * app.css — MinimalFrame global tokens + reset. Component styles live in the .svelte files.
  *
  * Darkroom: neutral greys so the photo is the only colour on screen (a tinted surround skews how you
- * judge colour), and one amber accent for the main action and whatever is selected.
+ * judge colour). One amber accent marks actions (Export, Share, Apply); selections are neutral ink, so the
+ * "do this" colour stands out and nothing competes with the photo's own colours.
  * Light or dark follows the device setting.
  */
 :root {
@@ -13,11 +14,12 @@
   --field: rgb(0 0 0 / 0.05); /* inputs, segmented controls, selected rows */
   --text: #18181a;
   --muted: rgb(24 24 26 / 0.6);
-  --accent: #f59e0b; /* fills: Export, selection marks */
+  --accent: #f59e0b; /* actions only: Export, Share, Apply, Save, progress */
   --on: #ffffff; /* the selected option in a switch: a raised chip on a grey track */
   --on-shadow: 0 1px 3px rgb(0 0 0 / 0.16), 0 0 0 1px rgb(0 0 0 / 0.04);
   --accent-strong: #fbbf24;
-  --accent-ink: #b45309; /* amber that reads as text on a light background */
+  --accent-ink: #18181a; /* selection marks: neutral ink, so the one amber stays the "do this" colour */
+  --warn: #b45309; /* warnings: warm, readable on a light background */
   --radius: 14px;
   --glass: var(--surface);
   --glass-strong: var(--surface);
@@ -33,7 +35,8 @@
     --field: rgb(255 255 255 / 0.06);
     --text: #f1f1ef;
     --muted: rgb(241 241 239 / 0.56);
-    --accent-ink: #fbbf24;
+    --accent-ink: #f1f1ef;
+    --warn: #fbbf24;
     --on: #3a3a3e;
     --on-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
   }

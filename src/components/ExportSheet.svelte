@@ -30,6 +30,7 @@
     slices,
     savesSeparately, // phones/tablets: separate images instead of a ZIP
   } = $props();
+  const QUALITY_NAMES = { good: "Good", high: "High", max: "Max" };
   const gpsCount = $derived(filesList.filter((f) => f.hadGps).length);
   let help = $state(false);
   // PNG and WebP at 4K or full size: slow to encode and big, especially on phones
@@ -60,64 +61,6 @@
         <p class="hint">{batchProgress.filename}</p>
       </div>
     {:else}
-      <fieldset>
-        <legend class="label">{t("Size")}</legend>
-        <div class="sizes">
-          {#each EXPORT_SIZES as s (s.id)}
-            <label class="size" class:on={exportPrefs.size === s.id}>
-              <input type="radio" name="size" value={s.id} bind:group={exportPrefs.size} class="sr-only" />
-              <strong>{t(s.label)}</strong>
-              <span>{sizeLabel(s, "framed")}</span>
-            </label>
-          {/each}
-        </div>
-      </fieldset>
-      <div class="two">
-        <div>
-          <p class="label">{t("Format")}</p>
-          <div class="seg">
-            <button aria-pressed={exportPrefs.format === "jpeg"} onclick={() => (exportPrefs.format = "jpeg")}>JPEG</button>
-            <button aria-pressed={exportPrefs.format === "png"} onclick={() => (exportPrefs.format = "png")}>PNG</button>
-            <button aria-pressed={exportPrefs.format === "webp"} onclick={() => (exportPrefs.format = "webp")}>WebP</button>
-          </div>
-        </div>
-        <div>
-          <p class="label">{t("Quality")}</p>
-          <div class="seg">
-            {#each [["good", "Good"], ["high", "High"], ["max", "Max"]] as [q, name] (q)}
-              <button aria-pressed={exportPrefs.quality === q} onclick={() => (exportPrefs.quality = q)} disabled={exportPrefs.format === "png"}>{t(name)}</button>
-            {/each}
-          </div>
-        </div>
-      </div>
-      <div class="meta-row">
-        <label class="switch">
-          <input
-            type="checkbox"
-            role="switch"
-            bind:checked={() => !exportPrefs.keepCamera || exportPrefs.format !== "jpeg", (v) => (exportPrefs.keepCamera = !v)}
-            disabled={exportPrefs.format !== "jpeg"}
-          />
-          <span class="switch-track" aria-hidden="true"></span>
-          {t("Remove metadata")}
-        </label>
-        {#if sizeEstimate}<span class="estimate">{slices > 1 ? t("{size} per carousel", { size: sizeEstimate }) : t("{size} per photo", { size: sizeEstimate })}</span>{/if}
-      </div>
-      {#if heavy}
-        <p class="warn-line" role="note">{t("{format} at this size is slow to save and makes big files. JPEG is faster.", { format: exportPrefs.format === "png" ? "PNG" : "WebP" })}</p>
-      {/if}
-      {#if help}
-        <div class="help" role="note">
-          <p>{t("JPEG works everywhere. High is a good balance; Max keeps every detail.")}</p>
-          <p>{t("PNG is lossless: the best quality, but large files.")}</p>
-          <p>{t("WebP is about a third smaller than JPEG at the same quality.")}</p>
-          <p>
-            <strong>{t("Remove metadata")}</strong> · {t("On: no camera data, serial numbers or location in the file. Off: JPEGs keep camera, lens, settings and date. Location is always removed.")}
-            {#if gpsCount}{gpsCount === 1 ? t("1 photo had a GPS location, now removed.") : t("{n} photos had a GPS location, now removed.", { n: gpsCount })}{/if}
-          </p>
-        </div>
-      {/if}
-
       <div class="actions">
         {#if saveQueue}
           <button class="btn accent big" onclick={saveNext}><Icon name="export" />{t("Save image {n} of {total}", { n: saveQueue.next + 1, total: saveQueue.files.length })}</button>
@@ -128,7 +71,7 @@
             <button class="btn accent big" onclick={() => shareFiles(pendingShare)}><Icon name="share" />{t("Share now")}</button>
           {:else}
             <button class="btn accent big" onclick={shareImage} disabled={!processedImage || isDownloading} autofocus>
-              <Icon name="share" />{isDownloading ? t("Preparing…") : t("Share to Instagram & more")}
+              <Icon name="share" />{isDownloading ? t("Preparing…") : t("Share to…")}
             </button>
           {/if}
         {/if}
@@ -145,6 +88,72 @@
         {/if}
       </div>
       {#if downloadStatus}<p class="status" role="status">{downloadStatus}</p>{/if}
+      <!-- The settings most people never change, folded into one line (opens on tap) -->
+      <details class="settings">
+        <summary>
+          <span>{t(EXPORT_SIZES.find((x) => x.id === exportPrefs.size)?.label ?? "")} · {exportPrefs.format === "jpeg" ? "JPEG" : exportPrefs.format === "png" ? "PNG" : "WebP"}{exportPrefs.format === "png" ? "" : ` · ${t(QUALITY_NAMES[exportPrefs.quality])}`}</span>
+          {#if sizeEstimate}<span class="estimate">{slices > 1 ? t("{size} per carousel", { size: sizeEstimate }) : t("{size} per photo", { size: sizeEstimate })}</span>{/if}
+        </summary>
+        <div class="settings-body">
+          <fieldset>
+            <legend class="label">{t("Size")}</legend>
+            <div class="sizes">
+              {#each EXPORT_SIZES as s (s.id)}
+                <label class="size" class:on={exportPrefs.size === s.id}>
+                  <input type="radio" name="size" value={s.id} bind:group={exportPrefs.size} class="sr-only" />
+                  <strong>{t(s.label)}</strong>
+                  <span>{sizeLabel(s, "framed")}</span>
+                </label>
+              {/each}
+            </div>
+          </fieldset>
+          <div class="two">
+            <div>
+              <p class="label">{t("Format")}</p>
+              <div class="seg">
+                <button aria-pressed={exportPrefs.format === "jpeg"} onclick={() => (exportPrefs.format = "jpeg")}>JPEG</button>
+                <button aria-pressed={exportPrefs.format === "png"} onclick={() => (exportPrefs.format = "png")}>PNG</button>
+                <button aria-pressed={exportPrefs.format === "webp"} onclick={() => (exportPrefs.format = "webp")}>WebP</button>
+              </div>
+            </div>
+            <div>
+              <p class="label">{t("Quality")}</p>
+              <div class="seg">
+                {#each [["good", "Good"], ["high", "High"], ["max", "Max"]] as [q, name] (q)}
+                  <button aria-pressed={exportPrefs.quality === q} onclick={() => (exportPrefs.quality = q)} disabled={exportPrefs.format === "png"}>{t(name)}</button>
+                {/each}
+              </div>
+            </div>
+          </div>
+          <div class="meta-row">
+            <label class="switch">
+              <input
+                type="checkbox"
+                role="switch"
+                bind:checked={() => !exportPrefs.keepCamera || exportPrefs.format !== "jpeg", (v) => (exportPrefs.keepCamera = !v)}
+                disabled={exportPrefs.format !== "jpeg"}
+              />
+              <span class="switch-track" aria-hidden="true"></span>
+              {t("Remove metadata")}
+            </label>
+          </div>
+        </div>
+      </details>
+      {#if heavy}
+        <p class="warn-line" role="note">{t("{format} at this size is slow to save and makes big files. JPEG is faster.", { format: exportPrefs.format === "png" ? "PNG" : "WebP" })}</p>
+      {/if}
+      {#if help}
+        <div class="help" role="note">
+          <p>{t("JPEG works everywhere. High is a good balance; Max keeps every detail.")}</p>
+          <p>{t("PNG is lossless: the best quality, but large files.")}</p>
+          <p>{t("WebP is about a third smaller than JPEG at the same quality.")}</p>
+          <p>
+            <strong>{t("Remove metadata")}</strong> · {t("On: no camera data, serial numbers or location in the file. Off: JPEGs keep camera, lens, settings and date. Location is always removed.")}
+            {#if gpsCount}{gpsCount === 1 ? t("1 photo had a GPS location, now removed.") : t("{n} photos had a GPS location, now removed.", { n: gpsCount })}{/if}
+          </p>
+        </div>
+      {/if}
+
       {#if fallbackDownloadUrl}
         <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>{t("Download didn't start? Save {name}", { name: fallbackFilename })}</a>
       {/if}
@@ -189,6 +198,41 @@
     flex-wrap: wrap;
     gap: 16px 22px;
   }
+  .settings {
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+  .settings summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    min-height: 40px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+  .settings summary::-webkit-details-marker {
+    display: none;
+  }
+  .settings summary::after {
+    content: "›";
+    font-size: 1.2rem;
+    color: var(--muted);
+    transition: rotate 150ms;
+  }
+  .settings[open] summary::after {
+    rotate: 90deg;
+  }
+  .settings summary > span:first-child {
+    flex: 1;
+  }
+  .settings-body {
+    display: grid;
+    gap: 16px;
+    padding-top: 10px;
+  }
   .help-btn {
     margin-left: auto;
     width: 30px;
@@ -216,7 +260,7 @@
   }
   .warn-line {
     font-size: 0.82rem;
-    color: var(--accent-ink);
+    color: var(--warn);
   }
   .help {
     display: grid;

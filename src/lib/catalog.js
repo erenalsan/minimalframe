@@ -155,24 +155,32 @@ const tpl = (id, name, fields) => ({
   autoFontSize: true,
   showExif: true,
   captionStyle: "stack",
+  filmStyle: null,
   ...fields,
-  textPosX: ALIGN_X[fields.textAlign ?? "left"],
+  textPosX: fields.textPosX ?? ALIGN_X[fields.textAlign ?? "left"],
 });
 
 export const BUILTIN_PRESETS = [
   tpl("gallery", "Gallery", { selectedRatioId: "orig", customMarginH: 6, customMarginV: 6, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left" }),
-  tpl("polaroid", "Instant", { selectedRatioId: "orig", customMarginH: 5, customMarginV: 5, captionSpace: 24, backgroundColor: "#fbfaf6", selectedFontId: "caveat", textAlign: "center", autoFontSize: false, manualFontSize: 40 }),
   tpl("museum", "Museum mat", { selectedRatioId: "4:5", customMarginH: 16, customMarginV: 16, backgroundColor: "#f2efe8", selectedFontId: "cormorant", textAlign: "center" }),
   tpl("square", "Feed square", { selectedRatioId: "1:1", customMarginH: 7, customMarginV: 7, backgroundColor: "#ffffff", selectedFontId: "montserrat", textAlign: "center" }),
   tpl("midnight", "Midnight", { selectedRatioId: "4:5", backgroundColor: "#0d0f12", selectedFontId: "montserrat", textAlign: "left" }),
   tpl("editorial", "Editorial", { selectedRatioId: "4:5", customMarginH: 10, customMarginV: 10, backgroundColor: "#141414", selectedFontId: "dmserif", textAlign: "center", softBloom: 15 }),
   tpl("kraft", "Kraft", { selectedRatioId: "4:5", customMarginH: 10, customMarginV: 10, backgroundColor: "#e7dcc8", selectedFontId: "playfair", textAlign: "center" }),
-  tpl("filmborder", "Film border", { selectedRatioId: "custom", customMarginH: 4, customMarginV: 4, backgroundColor: "#000000", selectedFontId: "spacemono", textAlign: "left", filmGrain: 20 }),
   tpl("cinema", "Cinema", { selectedRatioId: "16:9", customMarginH: 5, customMarginV: 5, backgroundColor: "#000000", selectedFontId: "bebas", textAlign: "center", filmGrain: 25, softBloom: 20 }),
   tpl("brandbar", "Brand bar", { selectedRatioId: "orig", customMarginH: 0, customMarginV: 0, captionSpace: 0, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left", captionStyle: "bar", autoFontSize: false, manualFontSize: 22 }),
   tpl("brandbar-dark", "Brand bar dark", { selectedRatioId: "4:5", customMarginH: 0, customMarginV: 0, backgroundColor: "#111111", selectedFontId: "montserrat", textAlign: "left", captionStyle: "bar", autoFontSize: false, manualFontSize: 22 }),
   tpl("spread", "Spread", { selectedRatioId: "4:5", customMarginH: 3, customMarginV: 3, backgroundColor: "#ffffff", selectedFontId: "archivo", textAlign: "left", captionStyle: "spread" }),
   tpl("story", "Story poster", { selectedRatioId: "9:16", customMarginH: 8, customMarginV: 8, backgroundColor: "#111111", selectedFontId: "bebas", textAlign: "center" }),
+];
+
+// Real film borders (see film.js): the photo in a 35 mm strip, an instant print, a darkroom print or a slide.
+// They take the photo's place in the frame, so ratio, background and caption still apply around them.
+export const FILM_PRESETS = [
+  tpl("film35", "35 mm", { filmStyle: "35mm", selectedRatioId: "4:5", customMarginH: 7, customMarginV: 7, backgroundColor: "#f2f1ed", selectedFontId: "spacemono", textAlign: "left", textPosX: 6, autoFontSize: false, manualFontSize: 17, filmInk: "#f2a23c" }),
+  tpl("instant", "Instant", { filmStyle: "instant", selectedRatioId: "4:5", customMarginH: 7, customMarginV: 7, backgroundColor: "#e6e4df", selectedFontId: "caveat", textAlign: "center", filmCard: "#f7f6f1" }),
+  tpl("darkroom", "Darkroom", { filmStyle: "darkroom", selectedRatioId: "4:5", customMarginH: 8, customMarginV: 8, backgroundColor: "#f6f5f1", selectedFontId: "caveat", textAlign: "left" }),
+  tpl("slide", "Slide", { filmStyle: "slide", selectedRatioId: "4:5", customMarginH: 6, customMarginV: 6, backgroundColor: "#e9e8e4", selectedFontId: "caveat", textAlign: "left", filmCard: "#f7f6f1" }),
 ];
 
 // Export settings, remembered on this device.

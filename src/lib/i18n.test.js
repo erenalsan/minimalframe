@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import tr from './locales/tr.js';
 import de from './locales/de.js';
-import { TOOLS, TOOL_HINTS, LOOKS, RATIOS, EXIF_FIELDS, BUILTIN_PRESETS, EXPORT_SIZES, SYSTEM_FONTS } from './catalog.js';
+import { TOOLS, TOOL_HINTS, LOOKS, RATIOS, EXIF_FIELDS, BUILTIN_PRESETS, FILM_PRESETS, EXPORT_SIZES, SYSTEM_FONTS } from './catalog.js';
 import { CROP_RATIOS } from './geometry.js';
 
 const files = (dir) => readdirSync(dir).flatMap((f) => {
@@ -28,11 +28,11 @@ for (const h of Object.values(TOOL_HINTS)) keys.add(h);
 for (const l of LOOKS) keys.add(l.name);
 for (const r of RATIOS) keys.add(r.label);
 for (const [, name] of EXIF_FIELDS) keys.add(name);
-for (const p of BUILTIN_PRESETS) keys.add(p.name);
+for (const p of [...BUILTIN_PRESETS, ...FILM_PRESETS]) keys.add(p.name);
 for (const s of EXPORT_SIZES) keys.add(s.label);
 for (const f of SYSTEM_FONTS) if (['system', 'serif', 'mono'].includes(f.id)) keys.add(f.label);
 for (const r of CROP_RATIOS) if (/[a-z]/i.test(r.label)) keys.add(r.label);
-for (const k of ['Good', 'High', 'Max', 'RGB', 'Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta']) keys.add(k);
+for (const k of ['Good', 'High', 'Max', 'RGB', 'Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta', 'White', 'Cream', 'Black']) keys.add(k);
 keys.delete('');
 
 if (process.env.I18N_DUMP) {

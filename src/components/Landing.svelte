@@ -1,7 +1,7 @@
 <script>
   // First screen, before any photo is open: a contact sheet of real prints from one photo.
   // Tapping a print opens your photo in that frame; the empty print well opens it as it is.
-  import { BUILTIN_PRESETS } from "../lib/catalog.js";
+  import { BUILTIN_PRESETS, FILM_PRESETS } from "../lib/catalog.js";
 
   // bare: just the print well, standing in for the photo on the workbench once every photo has been removed.
   import Icon from "./Icon.svelte";
@@ -10,14 +10,16 @@
   // langInWell: phones, where the top bar has no room for the language button.
   let { bare = false, langInWell = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick } = $props();
 
-  const preset = (id) => BUILTIN_PRESETS.find((p) => p.id === `preset_${id}`);
+  const touch = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches; // no dragging files on phones
+  const isApp = typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+  const preset = (id) => [...FILM_PRESETS, ...BUILTIN_PRESETS].find((p) => p.id === `preset_${id}`);
   // Images in /landing are the app's own output (the sample photo, one look per print).
   const PRINTS = [
     { img: "brandbar", w: 560, h: 764, label: "Brand bar", alt: "Photo above a white bar with the camera logo and settings", preset: preset("brandbar") },
     { img: "museum", w: 560, h: 700, label: "Museum mat", alt: "Photo in a wide cream mat", preset: preset("museum") },
-    { img: "filmborder", w: 560, h: 784, label: "Film border", alt: "Photo in a thin black film border", preset: preset("filmborder") },
+    { img: "film35", w: 560, h: 700, label: "35 mm", alt: "Photo in a 35 mm film strip with sprocket holes and edge print", preset: preset("film35") },
     { img: "spread", w: 560, h: 700, label: "Spread", alt: "Photo with its caption spread across the bottom", preset: preset("spread") },
-    { img: "instant", w: 560, h: 854, label: "Instant", alt: "Photo in an instant-film frame with a handwritten caption", preset: preset("polaroid") },
+    { img: "instant", w: 560, h: 700, label: "Instant", alt: "Photo as an instant print with a handwritten line", preset: preset("instant") },
     { img: "midnight", w: 560, h: 700, label: "Midnight", alt: "Photo on a near-black border", preset: preset("midnight") },
     { img: "carousel", w: 864, h: 360, label: "Carousel · 3 slides", alt: "A wide photo split into three slides", wide: true,
       preset: { selectedRatioId: "carousel", slides: 3, slideShape: "4:5" } },
@@ -27,8 +29,8 @@
 {#snippet well()}
   <div class="well" class:over={isDragging}>
     <span class="mark tl"></span><span class="mark tr"></span><span class="mark bl"></span><span class="mark br"></span>
-    {#if bare}<span class="plus" aria-hidden="true"><Icon name="add" /></span>{/if}
-    <p class="well-title">{isDragging ? t("Drop to open") : t("Drop photos here")}</p>
+    {#if bare}<button class="plus" onclick={onchoose} disabled={isLoading} tabindex="-1" aria-hidden="true"><Icon name="add" /></button>{/if}
+    {#if !touch || isDragging}<p class="well-title">{isDragging ? t("Drop to open") : t("Drop photos here")}</p>{/if}
     <button class="ink" onclick={onchoose} disabled={isLoading}>
       {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || t("Opening…")}{:else}{t("Open photos")}{/if}
     </button>
@@ -46,7 +48,7 @@
     <div class="intro">
       <h1>{t("Frame your photos for the feed.")}</h1>
       <p class="lead">{t("Borders, captions with your camera details, and carousels, plus film looks if you want to edit. Pick a frame below, or start with a plain photo.")}</p>
-      <p class="mono">{t("Runs in your browser · works offline · nothing uploaded")}</p>
+      <p class="mono">{isApp ? t("Works offline · nothing uploaded") : t("Runs in your browser · works offline · nothing uploaded")}</p>
     </div>
 
     {@render well()}
@@ -140,9 +142,18 @@
     width: 72px;
     height: 72px;
     margin-bottom: 4px;
+    border: 0;
     border-radius: 50%;
     background: var(--field);
     color: var(--text);
+    cursor: pointer; /* the + people tap first; "Open photos" below is the labelled one */
+    transition: background 150ms, transform 150ms;
+  }
+  .plus:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 14%, transparent);
+  }
+  .plus:active:not(:disabled) {
+    transform: scale(0.95);
   }
   .plus :global(svg) {
     width: 34px;

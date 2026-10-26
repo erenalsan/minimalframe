@@ -109,6 +109,34 @@ export function createProxyPreview(sourceCanvas, maxDim = 1080) {
 }
 
 // Older WebViews reject "from-image" (their default already honors EXIF), so retry without options.
+// The size a photo is shown at (EXIF rotation applied), read from its header without decoding the pixels.
+function displaySize(blob) {
+  return new Promise((ok, fail) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => (URL.revokeObjectURL(url), ok({ w: img.naturalWidth, h: img.naturalHeight }));
+    img.onerror = () => (URL.revokeObjectURL(url), fail(new Error("this image could not be read")));
+    img.src = url;
+  });
+}
+
+/**
+ * Decodes a photo upright at most maxDim on its long side, decoded small from the start (JPEG decoders scale
+ * while decoding), so a 24-megapixel photo needs a few MB instead of ~100 MB. Falls back to a full decode.
+ * @returns {Promise<{ bitmap: ImageBitmap, w: number, h: number }>} w, h: the photo's full upright size
+ */
+export async function decodeProxy(blob, maxDim) {
+  try {
+    const { w, h } = await displaySize(blob);
+    const k = Math.min(1, maxDim / Math.max(w, h));
+    const resize = k < 1 ? { resizeWidth: Math.round(w * k), resizeHeight: Math.round(h * k), resizeQuality: "high" } : {};
+    return { bitmap: await createImageBitmap(blob, { imageOrientation: "from-image", ...resize }), w, h };
+  } catch {
+    const bitmap = await decodeUpright(blob);
+    return { bitmap, w: bitmap.width, h: bitmap.height };
+  }
+}
+
 export async function decodeUpright(blob) {
   try {
     return await createImageBitmap(blob, { imageOrientation: "from-image" });

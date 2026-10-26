@@ -169,6 +169,7 @@
 
   input {
     -webkit-appearance: none;
+    --fill: color-mix(in srgb, var(--text) 70%, transparent); /* how far it moved: neutral, the photo shows the effect */
     appearance: none;
     width: 100%;
     height: 32px;
@@ -176,7 +177,7 @@
     border-radius: 999px;
     background:
       /* travelled distance from the neutral point */
-      linear-gradient(to right, transparent var(--lo), var(--accent) var(--lo), var(--accent) var(--hi), transparent var(--hi)) center / 100% 4px no-repeat,
+      linear-gradient(to right, transparent var(--lo), var(--fill) var(--lo), var(--fill) var(--hi), transparent var(--hi)) center / 100% 4px no-repeat,
       /* optional colour scale, e.g. temperature */
       var(--track, linear-gradient(color-mix(in srgb, var(--text) 18%, transparent), color-mix(in srgb, var(--text) 18%, transparent))) center / 100% 4px no-repeat;
     cursor: pointer;

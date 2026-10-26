@@ -49,6 +49,11 @@
 .btn.accent:hover:not(:disabled) {
   background: var(--accent-strong);
 }
+/* Confirming, not acting (Done): solid but neutral, so it never competes with the amber action */
+.btn.ink {
+  background: var(--text);
+  color: var(--bg);
+}
 .btn.ghost {
   border: 1px solid var(--glass-line);
   background: color-mix(in srgb, var(--text) 6%, transparent);
@@ -153,13 +158,37 @@ button:disabled {
   color: var(--muted);
 }
 .hint.warn {
-  color: var(--accent-ink);
+  color: var(--warn);
 }
 .sub {
   display: grid;
   gap: 10px;
   padding-top: 14px;
   border-top: 1px solid var(--glass-line);
+}
+/* A number with − and + (carousel slides, film frame number) */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stepper .label {
+  margin-right: 6px;
+}
+.stepper button {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--field);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+.stepper output {
+  min-width: 2ch;
+  text-align: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .row-btns {
   display: flex;
@@ -217,7 +246,10 @@ button:disabled {
   transition: translate 150ms;
 }
 .switch input:checked + .switch-track {
-  background: var(--accent);
+  background: var(--text);
+}
+.switch input:checked + .switch-track::after {
+  background: var(--bg); /* a dark knob on a light track (dark theme) and the reverse */
 }
 .switch input:checked + .switch-track::after {
   translate: 18px 0;

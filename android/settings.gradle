@@ -1,3 +1,8 @@
+// Lets Gradle fetch the Java 21 some plugins compile with (e.g. @capacitor/filesystem), into its own cache.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 include ':app'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')

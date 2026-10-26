@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/frameLayout.test.js && node src/lib/geometry.test.js && node src/lib/color.test.js && node src/lib/palette.test.js && node src/lib/exifCleaner.test.js && node src/lib/lut.test.js && node src/lib/recipes.test.js && node src/lib/matchLook.test.js && node src/lib/library.test.js && node src/lib/brandLogos.test.js && node src/lib/catalog.test.js && node src/lib/heifDecoder.test.js && node src/lib/zoom.test.js && node src/lib/i18n.test.js && node src/lib/exifWriter.test.js"
+    "test": "node src/lib/frameLayout.test.js && node src/lib/geometry.test.js && node src/lib/color.test.js && node src/lib/palette.test.js && node src/lib/exifCleaner.test.js && node src/lib/lut.test.js && node src/lib/recipes.test.js && node src/lib/matchLook.test.js && node src/lib/library.test.js && node src/lib/brandLogos.test.js && node src/lib/catalog.test.js && node src/lib/heifDecoder.test.js && node src/lib/zoom.test.js && node src/lib/i18n.test.js && node src/lib/exifWriter.test.js && node src/lib/fujiRecipe.test.js && node src/lib/film.test.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
@@ -19,6 +19,8 @@
     "@capacitor/android": "^8.5.3",
     "@capacitor/cli": "^8.5.3",
     "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/share": "^8.0.3",
     "@fontsource-variable/archivo": "^5.3.0",
     "@fontsource/bebas-neue": "^5.3.0",
     "@fontsource/caveat": "^5.3.0",
