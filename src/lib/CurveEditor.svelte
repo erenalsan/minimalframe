@@ -97,6 +97,8 @@
 <style>
   svg {
     width: 100%;
+    max-width: 30dvh; /* phones: the curve stays small enough to see the photo above it */
+    margin-inline: auto;
     aspect-ratio: 1;
     display: block;
     background: #1c1c20;

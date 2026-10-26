@@ -16,6 +16,7 @@
     "vite-plugin-pwa": "^2.0.0"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.3",
     "@capacitor/cli": "^8.5.3",
     "@capacitor/core": "^8.5.3",
     "@fontsource-variable/archivo": "^5.3.0",

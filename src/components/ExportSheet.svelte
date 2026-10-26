@@ -1,7 +1,7 @@
 <script>
   // The export dialog: size, format and quality, then share, save or batch-save. App does the actual work.
   import Icon from "./Icon.svelte";
-  import { t, i18n, setLang, LANGUAGES } from "../lib/i18n.svelte.js";
+  import { t } from "../lib/i18n.svelte.js";
   import { EXPORT_SIZES } from "../lib/catalog.js";
 
   let {
@@ -129,12 +129,6 @@
       {#if fallbackDownloadUrl}
         <a class="fallback" href={fallbackDownloadUrl} download={fallbackFilename}>{t("Download didn't start? Save {name}", { name: fallbackFilename })}</a>
       {/if}
-      <label class="lang">
-        <span>{t("Language")}</span>
-        <select value={i18n.lang} onchange={(e) => setLang(e.currentTarget.value)}>
-          {#each LANGUAGES as [id, name] (id)}<option value={id}>{name}</option>{/each}
-        </select>
-      </label>
     {/if}
   </div>
 </dialog>
@@ -175,27 +169,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 16px 22px;
-  }
-  /* Language lives here: the one sheet every user opens, without crowding the top bar. */
-  .lang {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--line);
-    font-size: 0.85rem;
-    color: var(--muted);
-  }
-  .lang select {
-    min-height: 36px;
-    padding: 4px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--line);
-    background: var(--field);
-    color: var(--text);
-    font: inherit;
   }
   .fallback {
     color: var(--accent-ink);

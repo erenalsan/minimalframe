@@ -2,6 +2,7 @@
   // Phones: every open photo as a big tile — tap to switch, add more, remove, tick for batch export.
   import Icon from "./Icon.svelte";
   import { t } from "../lib/i18n.svelte.js";
+  import LanguagePicker from "./LanguagePicker.svelte";
 
   let { filesList = $bindable(), activeIndex, onpick, onremove, onadd } = $props();
   const ticked = $derived(filesList.filter((f) => f.selected).length);
@@ -28,8 +29,18 @@
     "Swipe the photo left or right to switch between photos.",
   )}
 </p>
+<!-- phones: the top bar is full, so the language lives here -->
+<div class="lang">
+  <span class="label">{t("Language")}</span>
+  <LanguagePicker inline />
+</div>
 
 <style>
+  .lang {
+    display: grid;
+    gap: 8px;
+    margin-top: 6px;
+  }
   .photos {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));

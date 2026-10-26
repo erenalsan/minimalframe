@@ -27,16 +27,26 @@
     reset={0}
     signed
   />
-  <div class="row-btns">
+  <div class="row-btns turn">
     <button class="btn ghost" onclick={() => onturn(-1)}>{t("Rotate left")}</button>
     <button class="btn ghost" onclick={() => onturn(1)}>{t("Rotate right")}</button>
     <button class="btn ghost" onclick={() => onchange({ flip: !crop.flip })}>{t("Flip")}</button>
+    <button class="btn ghost" onclick={onreset} disabled={!canReset}>{t("Reset crop")}</button>
   </div>
-  <button class="btn ghost" onclick={onreset} disabled={!canReset}>{t("Reset crop")}</button>
   <p class="hint">{t("Drag the box or its corners. The crop shows on the photo when you switch to another tool.")}</p>
 </div>
 
 <style>
+  /* one row, so the crop tool stays short and the photo keeps the screen */
+  .turn {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .turn .btn {
+    padding: 9px 4px;
+    font-size: 0.8rem;
+    line-height: 1.15;
+  }
   /* Compact tray (phones, portrait tablets): one swipeable row, so the photo keeps the screen. Same query as COMPACT in App.svelte. */
   @media (max-width: 899px) and (min-height: 501px) {
     .seg.wrap {

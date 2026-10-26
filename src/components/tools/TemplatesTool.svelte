@@ -33,16 +33,25 @@
   {/each}
 </div>
 <button class="btn ghost" onclick={onsave}>{t("Save current settings as a template")}</button>
-<div class="row-btns">
+<details class="more">
+  <summary>{t("More")}</summary>
+  <div class="row-btns">
   <button class="btn ghost" onclick={onexport} disabled={!userPresets.length && !hasLooks}>{t("Back up my templates and looks")}</button>
   <label class="btn ghost">
     {t("Import")}
     <input type="file" accept=".json,application/json" onchange={onimport} class="sr-only" />
   </label>
-</div>
+  </div>
+</details>
 {#if libraryMessage}<p class="hint" role="status">{libraryMessage}</p>{/if}
 
 <style>
+  .more summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--muted);
+    padding: 4px 0 8px;
+  }
   /* Templates */
   .templates {
     display: grid;

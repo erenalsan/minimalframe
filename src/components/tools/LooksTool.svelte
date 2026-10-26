@@ -20,9 +20,7 @@
     onerror,
   } = $props();
 
-  function resetColorAdjustments() {
-    Object.assign(dev, freshDev());
-  }
+  let recipeDialog = $state.raw(null);
 
   // Copies (never shares) the look's nested curve and mixer, so later edits don't change the look itself.
   const applyLook = (l) => Object.assign(dev, freshDev(), JSON.parse(JSON.stringify(l.params)));
@@ -183,8 +181,8 @@
   {/each}
 </div>
 <div class="row-btns">
+  <button class="btn ghost" onclick={() => recipeDialog.showModal()}>{t("Fujifilm recipe")}</button>
   <button class="btn ghost" onclick={() => onsavelook("")}>{t("Save as my look")}</button>
-  <button class="btn ghost" onclick={resetColorAdjustments}>{t("Reset all edits")}</button>
 </div>
 {#if selectedCount > 1}
   <button class="btn ghost" onclick={applyEditsToSelected}>{t("Apply these edits to the other {n} selected", { n: selectedCount - 1 })}</button>
@@ -234,24 +232,31 @@
   {/if}
 {/if}
 
-<details class="sub recipe">
-  <summary class="label">{t("Paste a Fujifilm recipe")}</summary>
-  <textarea
-    class="text"
-    rows="7"
-    bind:value={ui.recipeText}
-    placeholder={"Film Simulation: Classic Chrome\nDynamic Range: DR400\nHighlight: -1\nShadow: +1\nColor: +2\nWhite Balance: Daylight, +2 Red & -4 Blue\nGrain Effect: Weak, Small"}
-    aria-label={t("Fujifilm recipe text")}
-  ></textarea>
-  <div class="row-btns">
-    <button class="btn accent" onclick={applyRecipe} disabled={!ui.recipeText.trim()}>{t("Apply recipe")}</button>
-    {#if ui.recipeApplied}
-      <button class="btn ghost" onclick={() => onsavelook(ui.recipeName)}>{t("Save as my look")}</button>
-    {/if}
+<!-- Fujifilm recipe: its own small dialog, opened from the button above -->
+<dialog class="sheet glass" bind:this={recipeDialog} aria-labelledby="recipe-title" onclick={(e) => e.target === recipeDialog && recipeDialog.close()}>
+  <div class="sheet-in recipe">
+    <div class="sheet-head">
+      <h2 id="recipe-title">{t("Fujifilm recipe")}</h2>
+      <button class="close" onclick={() => recipeDialog.close()} aria-label={t("Close")}>×</button>
+    </div>
+    <p class="hint" role="note">{t("Paste a recipe's settings, one per line. It becomes a look you can save.")}</p>
+    <textarea
+      class="text"
+      rows="7"
+      bind:value={ui.recipeText}
+      placeholder={"Film Simulation: Classic Chrome\nDynamic Range: DR400\nHighlight: -1\nShadow: +1\nColor: +2\nWhite Balance: Daylight, +2 Red & -4 Blue\nGrain Effect: Weak, Small"}
+      aria-label={t("Fujifilm recipe text")}
+    ></textarea>
+    <div class="row-btns">
+      <button class="btn accent" onclick={applyRecipe} disabled={!ui.recipeText.trim()}>{t("Apply recipe")}</button>
+      {#if ui.recipeApplied}
+        <button class="btn ghost" onclick={() => (recipeDialog.close(), onsavelook(ui.recipeName))}>{t("Save as my look")}</button>
+      {/if}
+    </div>
+    {#if ui.recipeNote}<p class="hint" role="status">{ui.recipeNote}</p>{/if}
+    <p class="hint" role="note">{t("Film simulations are approximations of Fujifilm's in-camera looks.")}</p>
   </div>
-  {#if ui.recipeNote}<p class="hint" role="status">{ui.recipeNote}</p>{/if}
-  <p class="hint">{t("Film simulations are approximations of Fujifilm's in-camera looks.")}</p>
-</details>
+</dialog>
 
 <style>
   /* Looks */
@@ -328,8 +333,9 @@
     object-fit: cover;
     display: block;
   }
-  .recipe summary {
-    cursor: pointer;
+  .recipe {
+    display: grid;
+    gap: 12px;
   }
   .recipe textarea {
     width: 100%;

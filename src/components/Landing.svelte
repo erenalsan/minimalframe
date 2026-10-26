@@ -5,8 +5,10 @@
 
   // bare: just the print well, standing in for the photo on the workbench once every photo has been removed.
   import Icon from "./Icon.svelte";
-  import { t, i18n, setLang, LANGUAGES } from "../lib/i18n.svelte.js";
-  let { bare = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick } = $props();
+  import { t } from "../lib/i18n.svelte.js";
+  import LanguagePicker from "./LanguagePicker.svelte";
+  // langInWell: phones, where the top bar has no room for the language button.
+  let { bare = false, langInWell = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick } = $props();
 
   const preset = (id) => BUILTIN_PRESETS.find((p) => p.id === `preset_${id}`);
   // Images in /landing are the app's own output (the sample photo, one look per print).
@@ -32,6 +34,7 @@
     </button>
     {#if !bare}<button class="link" onclick={onsample} disabled={isLoading}>{t("or try the sample")}</button>{/if}
     <p class="mono">JPEG · PNG · HEIC · RAW</p>
+    {#if bare && langInWell}<LanguagePicker inline />{/if}
   </div>
 {/snippet}
 
@@ -65,12 +68,6 @@
     <span>{t("Film looks · LUTs · recipes")}</span>
     <span>{t("Batch export")}</span>
     <span>{t("Location removed on export")}</span>
-    <label class="lang">
-      <span class="sr-only">{t("Language")}</span>
-      <select value={i18n.lang} onchange={(e) => setLang(e.currentTarget.value)}>
-        {#each LANGUAGES as [id, name] (id)}<option value={id}>{name}</option>{/each}
-      </select>
-    </label>
   </footer>
 </div>
 {/if}
@@ -248,19 +245,6 @@
   .print:hover:not(:disabled) img { transform: translateY(-4px); }
   .print:hover .mono, .print:focus-visible .mono { color: var(--text); }
 
-  footer .lang {
-    margin-left: auto;
-  }
-  footer select {
-    min-height: 36px;
-    padding: 4px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    text-transform: none;
-  }
   footer {
     display: flex;
     flex-wrap: wrap;

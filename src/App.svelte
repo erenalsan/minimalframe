@@ -79,6 +79,8 @@
   import ExportSheet from "./components/ExportSheet.svelte";
   import Icon from "./components/Icon.svelte";
   import Landing from "./components/Landing.svelte";
+  import LanguagePicker from "./components/LanguagePicker.svelte";
+  import { logoLib, addLogo, useLogo, deleteLogo } from "./lib/logoLibrary.svelte.js";
   import PhotosTray from "./components/PhotosTray.svelte";
   import SaveDialog from "./components/SaveDialog.svelte";
   import Histogram from "./lib/Histogram.svelte";
@@ -266,6 +268,15 @@
   }
 
   let printEl = $state.raw(null);
+  // Revert: the photo back to how it came out of the camera, in one tap (undo brings the edits back).
+  const edited = $derived(
+    !!activeItem && (!isIdentity(activeItem.crop) || JSON.stringify($state.snapshot(dev)) !== JSON.stringify(freshDev())),
+  );
+  function revertPhoto() {
+    Object.assign(dev, freshDev());
+    activeItem.crop = null;
+    scheduleRender(true);
+  }
   const toolOpen = (id) => activeTool[activeTab] === id && (!compact || (trayOpen && trayView === "tool"));
   let exportDialog = $state.raw(null);
   let fileInput = $state.raw(null);
@@ -673,35 +684,38 @@
     ctx.restore();
   }
 
-  let logoObjectUrl = null;
+  // The logo in use comes from your saved logos (logoLibrary), so it's back after a reload.
+  $effect(() => {
+    const entry = logoLib.list.find((l) => l.id === logoLib.current);
+    if (!entry) {
+      logoImage = null;
+      logoName = "";
+      return;
+    }
+    let live = true;
+    const img = new Image();
+    img.onload = () => {
+      if (!live) return;
+      logoImage = img;
+      logoName = entry.name;
+      scheduleRender(false);
+    };
+    img.onerror = () => {
+      if (!live) return;
+      deleteLogo(entry.id); // not an image after all: don't keep it
+      loadError = t("{name} is not an image this browser can read.", { name: entry.name });
+    };
+    img.src = entry.url;
+    return () => (live = false);
+  });
 
   function onLogoInput(e) {
     const file = e.target.files?.[0];
-    if (!file) return;
-    if (logoObjectUrl) {
-      URL.revokeObjectURL(logoObjectUrl);
-      logoObjectUrl = null;
-    }
-    logoObjectUrl = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      logoImage = img;
-      logoName = file.name;
-      scheduleRender(false);
-    };
-    img.src = logoObjectUrl;
     e.target.value = "";
+    if (file) addLogo(file);
   }
 
-  function removeLogo() {
-    if (logoObjectUrl) {
-      URL.revokeObjectURL(logoObjectUrl);
-      logoObjectUrl = null;
-    }
-    logoImage = null;
-    logoName = "";
-    scheduleRender(false);
-  }
+  const removeLogo = () => useLogo(null); // off the photo; it stays in your logos
 
   // ─── Templates (saved on this device) ──────────────────────────────────────
   const PRESETS_STORAGE_KEY = "mf_layout_presets_v1";
@@ -2146,6 +2160,7 @@
         <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>{t("Frame")}</button>
       </div>
       <div class="bar-side end">
+        {#if !compact}<LanguagePicker />{/if}
         <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label={t("Add photos")} title={t("Add photos")}><Icon name="add" /></button>
         <button class="icon-btn" onclick={undo} disabled={!canUndo || !activeItem} aria-label={t("Undo")} title={t("Undo (Ctrl+Z)")}><Icon name="undo" /></button>
         <button class="icon-btn" onclick={redo} disabled={!canRedo || !activeItem} aria-label={t("Redo")} title={t("Redo (Ctrl+Shift+Z)")}><Icon name="redo" /></button>
@@ -2159,6 +2174,9 @@
           }}><Icon name="export" /><span class="bar-export-label">{t("Export")}</span></button
         >
       </div>
+    {:else}
+      <!-- first visit: the language is the one setting people may need before anything else -->
+      <div class="bar-side end"><LanguagePicker /></div>
     {/if}
   </header>
 
@@ -2188,7 +2206,7 @@
           style:--pa={canvasAspect}
           aria-label={t("Preview of {name}", { name: activeItem?.name ?? "" })}
         ></canvas>
-        <canvas class="ghost" bind:this={ghostEl} aria-hidden="true"></canvas>
+        <canvas class="morph-ghost" bind:this={ghostEl} aria-hidden="true"></canvas>
         {#if dev.softBloom > 0}
           <div
             class="fx-bloom"
@@ -2281,6 +2299,7 @@
     {#if sessionChecked && (!started || !activeItem)}
       <Landing
         bare={started}
+        langInWell={compact}
         {isLoading}
         {loadingStatus}
         {isDragging}
@@ -2366,7 +2385,12 @@
           <h2>{compact && trayView === "photos" ? t("Photos") : t(TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1])}</h2>
           <p class="tool-hint">{t(TOOL_HINTS[activeTool[activeTab]])}</p>
         </div>
-        <button class="btn accent done" onclick={closeTray}>{t("Done")}</button>
+        <div class="head-actions">
+          {#if activeTab === "editor" && activeItem && !(compact && trayView === "photos")}
+            <button class="btn ghost revert" onclick={revertPhoto} disabled={!edited} title={t("Remove every edit and the crop from this photo")}>{t("Revert")}</button>
+          {/if}
+          <button class="btn accent done" onclick={closeTray}>{t("Done")}</button>
+        </div>
       </div>
 
       <div class="body" id="tool-body">
@@ -2384,7 +2408,7 @@
           {@const tool = activeTool.editor}
           {#if histo}<Histogram bins={histo} />{/if}
           {#if !canDevelop}
-            <p class="hint">
+            <p class="hint" role="note">
               {t("This device can't run the full editor, so only exposure, contrast and saturation are applied.")}
             </p>
           {/if}
@@ -2591,6 +2615,9 @@
     padding: 6px 12px 6px 18px;
     border-bottom: 1px solid var(--line);
   }
+  .app > .bar {
+    z-index: 5; /* its language menu opens over the photo area */
+  }
   .app.empty .bar {
     background: transparent;
     border-bottom-color: transparent;
@@ -2602,6 +2629,7 @@
     min-width: 0;
   }
   .bar-side.end {
+    grid-column: -2; /* the right edge, also on the landing page where there is no Edit/Frame switch */
     justify-content: flex-end;
   }
   /* Phones: the current photo as a button that opens the Photos tray (desktop has the strip instead). */
@@ -2671,6 +2699,7 @@
   .bar-export {
     margin-left: 8px;
     padding: 9px 16px;
+    white-space: nowrap; /* a long label ("Dışa aktar") goes icon-only instead of wrapping (see barTight) */
   }
   .bar.tight .bar-export-label {
     display: none;
@@ -2776,7 +2805,7 @@
     width: min(100cqw, 100cqh * var(--pa));
     height: auto;
   }
-  .ghost {
+  .morph-ghost {
     opacity: 0;
     pointer-events: none;
   }
@@ -3023,6 +3052,17 @@
     font-weight: 700;
     letter-spacing: -0.01em;
   }
+  .head-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
+  .revert {
+    padding: 7px 14px;
+    font-size: 0.85rem;
+  }
   .tool-hint {
     margin-top: 3px;
     font-size: 0.8rem;
@@ -3106,13 +3146,18 @@
   }
 
   /* ── Overlays on the photo ─────────────────────────────────────────────── */
+  /* "Original" while holding: a frosted pill, readable on any photo (its own colour, not the page's text colour) */
   .badge {
     position: absolute;
     top: 10px;
     left: 10px;
-    padding: 3px 10px;
+    padding: 4px 11px;
     border-radius: 999px;
-    background: rgb(0 0 0 / 0.6);
+    background: rgb(20 20 22 / 0.42);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgb(255 255 255 / 0.18);
+    color: #fff;
     font-size: 0.78rem;
     font-weight: 600;
   }
@@ -3303,6 +3348,10 @@
       align-items: center;
       padding: 8px 10px 0 16px;
     }
+    /* Phones: no explanations in the tray (each slider's ⓘ still has one); messages with a role stay. */
+    .body :global(.hint:not([role]):not(.warn)) {
+      display: none;
+    }
     .panel-head h2 {
       font-size: 0.95rem;
     }
@@ -3310,7 +3359,7 @@
       display: block;
     }
     .body {
-      max-height: 34dvh; /* about a third of the screen at most; the photo keeps the rest */
+      max-height: 26dvh; /* about a quarter of the screen at most: the photo is what you're looking at */
       padding: 10px 14px 12px;
       gap: 12px;
     }

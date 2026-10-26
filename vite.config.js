@@ -9,6 +9,7 @@ export default defineConfig({
     // Installable, fully offline app: every asset (fonts, RAW decoder) is precached on first visit.
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: false, // registered in main.js, and only on the website (see there)
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'MinimalFrame',
