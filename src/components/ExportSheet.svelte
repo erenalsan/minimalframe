@@ -31,6 +31,9 @@
     savesSeparately, // phones/tablets: separate images instead of a ZIP
   } = $props();
   const gpsCount = $derived(filesList.filter((f) => f.hadGps).length);
+  let help = $state(false);
+  // PNG and WebP at 4K or full size: slow to encode and big, especially on phones
+  const heavy = $derived(exportPrefs.format !== "jpeg" && ["4k", "full"].includes(exportPrefs.size));
 </script>
 
 <dialog
@@ -46,6 +49,7 @@
   <div class="sheet-in">
     <div class="sheet-head">
       <h2 id="export-title">{t("Export")}</h2>
+      <button class="help-btn" class:on={help} aria-expanded={help} aria-label={t("How exporting works")} title={t("How exporting works")} onclick={() => (help = !help)}>?</button>
       <button class="close" onclick={() => dialog.close()} disabled={isBatchExporting} aria-label={t("Close")}>×</button>
     </div>
 
@@ -86,18 +90,33 @@
           </div>
         </div>
       </div>
-      <p class="privacy">
-        🔒 {t("Saved without metadata: no GPS location, serial numbers or camera data in the file.")}
-        {#if gpsCount}{gpsCount === 1 ? t("1 photo had a GPS location, now removed.") : t("{n} photos had a GPS location, now removed.", { n: gpsCount })}{/if}
-      </p>
-      {#if sizeEstimate}<p class="estimate">{slices > 1 ? t("{size} per carousel", { size: sizeEstimate }) : t("{size} per photo", { size: sizeEstimate })}</p>{/if}
-      <p class="hint">
-        {exportPrefs.format === "png"
-          ? t("PNG is lossless: the best quality, but large files.")
-          : exportPrefs.format === "webp"
-            ? t("WebP is about a third smaller than JPEG at the same quality.")
-            : t("JPEG works everywhere. High is a good balance; Max keeps every detail.")}
-      </p>
+      <div class="meta-row">
+        <label class="switch">
+          <input
+            type="checkbox"
+            role="switch"
+            bind:checked={() => !exportPrefs.keepCamera || exportPrefs.format !== "jpeg", (v) => (exportPrefs.keepCamera = !v)}
+            disabled={exportPrefs.format !== "jpeg"}
+          />
+          <span class="switch-track" aria-hidden="true"></span>
+          {t("Remove metadata")}
+        </label>
+        {#if sizeEstimate}<span class="estimate">{slices > 1 ? t("{size} per carousel", { size: sizeEstimate }) : t("{size} per photo", { size: sizeEstimate })}</span>{/if}
+      </div>
+      {#if heavy}
+        <p class="warn-line" role="note">{t("{format} at this size is slow to save and makes big files. JPEG is faster.", { format: exportPrefs.format === "png" ? "PNG" : "WebP" })}</p>
+      {/if}
+      {#if help}
+        <div class="help" role="note">
+          <p>{t("JPEG works everywhere. High is a good balance; Max keeps every detail.")}</p>
+          <p>{t("PNG is lossless: the best quality, but large files.")}</p>
+          <p>{t("WebP is about a third smaller than JPEG at the same quality.")}</p>
+          <p>
+            <strong>{t("Remove metadata")}</strong> · {t("On: no camera data, serial numbers or location in the file. Off: JPEGs keep camera, lens, settings and date. Location is always removed.")}
+            {#if gpsCount}{gpsCount === 1 ? t("1 photo had a GPS location, now removed.") : t("{n} photos had a GPS location, now removed.", { n: gpsCount })}{/if}
+          </p>
+        </div>
+      {/if}
 
       <div class="actions">
         {#if saveQueue}
@@ -170,6 +189,48 @@
     flex-wrap: wrap;
     gap: 16px 22px;
   }
+  .help-btn {
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+  .help-btn.on,
+  .help-btn:hover {
+    color: var(--text);
+    background: var(--field);
+  }
+  .help-btn + :global(.close) {
+    margin-left: 8px;
+  }
+  .meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .warn-line {
+    font-size: 0.82rem;
+    color: var(--accent-ink);
+  }
+  .help {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--field);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  .help strong {
+    color: var(--text);
+  }
   .fallback {
     color: var(--accent-ink);
     font-size: 0.92rem;
@@ -190,16 +251,10 @@
     background: var(--accent);
     transition: width 200ms;
   }
-  .privacy {
-    font-size: 0.85rem;
-    line-height: 1.45;
-    padding: 10px 12px;
-    border-radius: 12px;
-    background: var(--field);
-  }
   .estimate {
-    font-size: 0.92rem;
+    font-size: 0.85rem;
     font-weight: 600;
+    color: var(--muted);
   }
   @media (max-width: 899px) {
     .sizes {

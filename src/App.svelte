@@ -47,6 +47,7 @@
     turnedSize,
   } from "./lib/geometry.js";
   import { idbGet, idbSet, idbDel, idbKeys } from "./lib/store.js";
+  import { withExif } from "./lib/exifWriter.js";
   import { t, i18n } from "./lib/i18n.svelte.js";
   import { Capacitor, registerPlugin } from "@capacitor/core";
   import { zoomAt, clampPan, NO_ZOOM, MAX_ZOOM } from "./lib/zoom.js";
@@ -988,7 +989,8 @@
   let framedSize = $state({ w: 0, h: 0 }); // full-resolution size of the framed export
   let photoSize = $state({ w: 0, h: 0 }); // full-resolution size of the photo alone
   const EXPORT_KEY = "mf_export_v1";
-  let exportPrefs = $state({ size: "full", format: "jpeg", quality: "high" });
+  // keepCamera: JPEG exports keep camera, lens, settings and date (never location). Off by default.
+  let exportPrefs = $state({ size: "full", format: "jpeg", quality: "high", keepCamera: false });
   try {
     Object.assign(
       exportPrefs,
@@ -1353,6 +1355,17 @@
           rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
           selected: true, // included in batch export
           hadGps: rawExif?.GPSLatitude != null || rawExif?.latitude != null, // exports never contain it
+          // the camera's own values, for exports that keep camera info (see exifWriter.js)
+          camera: {
+            make: rawExif?.Make,
+            model: rawExif?.Model,
+            lens: rawExif?.LensModel,
+            fNumber: rawExif?.FNumber,
+            exposure: rawExif?.ExposureTime,
+            iso: rawExif?.ISO,
+            focal: rawExif?.FocalLength,
+            taken,
+          },
           small, // 160px source for looks and strip thumbnails
           dev: freshDev(), // this photo's own edits
           crop: null, // this photo's crop / rotation (see geometry.js)
@@ -1934,7 +1947,8 @@
     const parts = n > 1 ? sliceCanvas(canvas, n) : [canvas];
     const files = [];
     for (let i = 0; i < parts.length; i++) {
-      const { blob, ext } = await encodeCanvas(parts[i]);
+      let { blob, ext } = await encodeCanvas(parts[i]);
+      if (exportPrefs.keepCamera && ext === "jpg" && item.camera) blob = await withExif(blob, item.camera);
       files.push({
         name: n > 1 ? `${base}_${i + 1}of${n}.${ext}` : `${base}.${ext}`,
         blob,
