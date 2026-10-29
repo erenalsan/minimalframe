@@ -5,6 +5,7 @@
   import { Capacitor } from "@capacitor/core";
   import Icon from "./Icon.svelte";
   import { t, i18n } from "../lib/i18n.svelte.js";
+  import { zoomAt, clampPan, NO_ZOOM } from "../lib/zoom.js";
 
   let { open = $bindable(false), Gallery, closeOnBack } = $props();
 
@@ -138,7 +139,7 @@
   }
   function goTo(i) {
     goal = Math.max(0, Math.min(items.length - 1, i));
-    if (goal !== viewing) asking = false;
+    if (goal !== viewing) (asking = false), (zoom = NO_ZOOM);
     viewing = goal; // the counter and arrows show where it's going at once
     glide();
   }
@@ -147,6 +148,7 @@
   // jump without motion (opening, after a delete)
   async function place(i) {
     stop();
+    zoom = NO_ZOOM;
     pos = goal = viewing = i;
     vel = 0;
     near = i;
@@ -181,7 +183,7 @@
     if (leaving || viewing < 0) return;
     drag = null;
     pulling = false;
-    if (raf || pos !== goal) await place(goal); // closing mid-glide: land first
+    if (raf || pos !== goal || zoomed) await place(goal); // closing mid-glide or zoomed in: land first
     if (!still) {
       leaving = true;
       const el = pic();
@@ -200,16 +202,81 @@
     asking = false;
   }
 
+  // ── Zoom ── on the photo in the middle: pinch, or double-tap (in to where it was tapped, or back out).
+  // Zoomed in, one finger moves around the photo instead of turning the page. Turning the page resets it.
+  let zoom = $state(NO_ZOOM);
+  let snapping = $state(false); // a double-tap eases to its zoom; fingers are followed directly
+  const zoomed = $derived(zoom.s > 1.01);
+  const fingers = new Map(); // pointerId → where it is
+  let pinch = null;
+  let pan = null;
+  let lastTap = null;
+  function centre() {
+    const r = viewer.querySelector(".panel.cur").getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+  function setZoom(z, ease = false) {
+    snapping = ease && !still;
+    const el = pic();
+    zoom = z.s <= 1.01 || !el ? NO_ZOOM : clampPan(z, el.offsetWidth, el.offsetHeight);
+  }
+  function startPinch() {
+    // a second finger: turning the page or moving around gives way to the pinch
+    if (drag) {
+      const d = drag;
+      drag = null;
+      pulling = false;
+      if (d.axis === "x") goTo(d.heading);
+    }
+    pan = null;
+    snapping = false;
+    const [a, b] = [...fingers.values()];
+    const c = centre();
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid: { x: (a.x + b.x) / 2 - c.x, y: (a.y + b.y) / 2 - c.y }, z: zoom };
+  }
+  function pinchMove() {
+    const [a, b] = [...fingers.values()];
+    const c = centre();
+    const mid = { x: (a.x + b.x) / 2 - c.x, y: (a.y + b.y) / 2 - c.y };
+    // zoom about where the pinch began, and move with the fingers as they travel together
+    const z = zoomAt(pinch.z, (pinch.z.s * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, pinch.mid);
+    setZoom({ s: z.s, x: z.x + mid.x - pinch.mid.x, y: z.y + mid.y - pinch.mid.y });
+  }
+  function tapped(e) {
+    const c = centre();
+    if (lastTap && e.timeStamp - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+      lastTap = null;
+      setZoom(zoomed ? NO_ZOOM : zoomAt(zoom, 2.5, { x: e.clientX - c.x, y: e.clientY - c.y }), true);
+    } else lastTap = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+  }
+
   // the finger: catches the strip wherever it is; the direction is decided after a few pixels, and
   // vertical moves are left alone
   let drag = null;
   function down(e) {
     if (leaving || e.button > 0 || e.target.closest("button")) return;
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (fingers.size === 2) return startPinch();
+    if (fingers.size > 2) return;
+    if (zoomed) {
+      snapping = false;
+      pan = { x: e.clientX, y: e.clientY, z: zoom, moved: false };
+      return;
+    }
     stop(); // caught mid-glide: it stays under the finger
     vel = 0;
     drag = { id: e.pointerId, x: e.clientX, y: e.clientY, from: pos, heading: goal, axis: null, track: [[e.timeStamp, pos]] };
   }
   function move(e) {
+    if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch) return fingers.size >= 2 && pinchMove();
+    if (pan) {
+      const dx = e.clientX - pan.x;
+      const dy = e.clientY - pan.y;
+      pan.moved ||= Math.hypot(dx, dy) > 8;
+      pulling = pan.moved;
+      return setZoom({ s: pan.z.s, x: pan.z.x + dx, y: pan.z.y + dy });
+    }
     if (!drag || e.pointerId !== drag.id) return;
     const mx = e.clientX - drag.x;
     if (!drag.axis) {
@@ -234,12 +301,29 @@
     paint();
   }
   function up(e) {
+    fingers.delete(e.pointerId);
+    if (pinch) {
+      if (fingers.size >= 2) return;
+      pinch = null;
+      // one finger still down and zoomed in: it carries on moving around the photo
+      const [f] = fingers.values();
+      pan = f && zoomed ? { x: f.x, y: f.y, z: zoom, moved: true } : null;
+      return;
+    }
+    if (pan) {
+      const p = pan;
+      pan = null;
+      pulling = false;
+      if (!p.moved && e.type === "pointerup") tapped(e);
+      return;
+    }
     const d = drag;
     if (!d || e.pointerId !== d.id) return;
     // a fast flick may send only a move or two: where the finger lifts counts too
     if (d.axis === "x" && e.type === "pointerup") follow(e);
     drag = null;
     pulling = false;
+    if (!d.axis && e.type === "pointerup") tapped(e);
     if (d.axis !== "x") return glide(); // a tap on a moving strip lets it land
     // speed over the last ~100 ms, always against an earlier point than the last
     const now = d.track.at(-1);
@@ -335,7 +419,12 @@
         <div class="track" bind:this={track}>
           {#each panels as { i, it } (it.id)}
             <div class="panel" class:cur={i === viewing} style:left="calc({i} * (100% + {GAP}px))" aria-hidden={i !== viewing}>
-              <div class="pic" style:--ar="{it.width || 4} / {it.height || 5}">
+              <div
+                class="pic"
+                class:snap={i === viewing && snapping}
+                style:--ar="{it.width || 4} / {it.height || 5}"
+                style:transform={i === viewing && zoomed ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})` : null}
+              >
                 {#if thumbs[it.id]}<img class="lo" src={thumbs[it.id]} alt="" draggable="false" />{/if}
                 <!-- full images only next to where the strip is: big exports, mid-range phones -->
                 {#if Math.abs(i - near) <= 1 || i === viewing}<img class="hi" src={src(it)} alt={i === viewing ? it.name : ""} draggable="false" decoding="async" />{/if}
@@ -548,7 +637,7 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    touch-action: pan-y;
+    touch-action: none; /* every finger is ours: turning pages, pinching, moving around a zoomed photo */
   }
   .track {
     position: absolute;
@@ -569,7 +658,10 @@
     position: relative;
     aspect-ratio: var(--ar);
     width: min(100cqw, 100cqh * (var(--ar)));
-    will-change: transform;
+    /* no will-change: zoomed in, the browser redraws the photo sharp at its new size */
+  }
+  .pic.snap {
+    transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .pic img {
     position: absolute;
