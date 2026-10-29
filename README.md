@@ -88,6 +88,8 @@ Photos you're working on come back after the app is closed, including originals,
 - **The one online request:** when *Show location* is on and a photo has a GPS position but no place name, its position, rounded to about 100 m, is sent to [OpenStreetMap Nominatim](https://nominatim.org) to find the place name. The answer is cached on the device. With the option off, or without internet, nothing is sent.
 - No accounts, no analytics, no ads.
 
+The full details are in the [privacy policy](PRIVACY.md).
+
 ---
 
 ## Get it
@@ -139,7 +141,18 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Or open the `android/` folder in Android Studio and press **Run**. The app's own Android code lives in `android/app/src/main/java/com/eren/minimalframe/`:
+Or open the `android/` folder in Android Studio and press **Run**.
+
+**Release build.** Release APKs are signed with a key kept outside the repo. Put its location and passwords in `android/keystore.properties` (ignored by Git):
+
+```
+storeFile=C:/path/to/minimalframe-release.jks
+storePassword=…
+keyAlias=minimalframe
+keyPassword=…
+```
+
+Then `./gradlew assembleRelease` gives a signed, shrunk `app/build/outputs/apk/release/app-release.apk`. For each new release, raise `versionCode` by one and set `versionName` in `android/app/build.gradle`. The app's own Android code lives in `android/app/src/main/java/com/eren/minimalframe/`:
 
 | File | What it does |
 |---|---|
@@ -179,10 +192,10 @@ The English text is the key: `t("Export")` gives the Turkish or German version f
 ## Roadmap
 
 ### Before the first release
-- [ ] App icon and splash screen
-- [ ] An animated first landing page
+- [x] App icon and splash screen
+- [x] An animated first landing page
 - [ ] Version 0.1.0, a signed release APK on GitHub Releases
-- [ ] Privacy page (the OpenStreetMap lookup is the only online request)
+- [x] Privacy page: [PRIVACY.md](PRIVACY.md)
 
 ### Ideas for later
 - **Google Play** release.
