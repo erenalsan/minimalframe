@@ -95,6 +95,7 @@
   import Landing from "./components/Landing.svelte";
   import LanguagePicker from "./components/LanguagePicker.svelte";
   import SavedPhotos from "./components/SavedPhotos.svelte";
+  import { useColor } from "./lib/colorMemory.svelte.js";
   import ThemePicker from "./components/ThemePicker.svelte";
   import { logoLib, addLogo, useLogo, deleteLogo } from "./lib/logoLibrary.svelte.js";
   import PhotosTray from "./components/PhotosTray.svelte";
@@ -1347,6 +1348,7 @@
   const photoSig = (f, frameJson) => JSON.stringify([f.dev, f.crop, f.fill, f.exifOverride]) + frameJson;
   let exporting = []; // the photos the export under way is made from (marked done when it succeeds)
   function markExported() {
+    if (!frame.filmStyle) useColor(frame.backgroundColor); // the border colour joins the picker's recent colours
     const frameJson = JSON.stringify(frameSnapshot());
     for (const f of exporting) f.exportedSig = photoSig(f, frameJson);
   }
@@ -2646,7 +2648,11 @@
 >
   <header class="bar" class:tight={barTight} bind:this={barEl}>
     <div class="bar-side">
-      <span class="wordmark"><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text">MinimalFrame</span></span>
+      <span class="wordmark"
+        ><svg class="mark" viewBox="0 0 108 108" aria-hidden="true"
+          ><rect width="108" height="108" rx="24" fill="var(--mark-wall)" /><rect x="27.5" y="25.5" width="53" height="57" fill="none" stroke="var(--mark-ink)" stroke-width="4" /><rect x="38" y="36" width="32" height="36" fill="var(--mark-print)" /><circle cx="61" cy="46" r="4.5" fill="#f59e0b" /></svg
+        ><span class="wm-text">MinimalFrame</span></span
+      >
       {#if started}
         <!-- Phones: the photos button grows in from the left when the first photo arrives, sliding the
              Edit/Frame switch over to make room. Several photos show as a small fanned stack with their count. -->

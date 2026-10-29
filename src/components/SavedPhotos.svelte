@@ -317,6 +317,8 @@
           {/each}
         </div>
       {/each}
+      <!-- Android shows the app only the photos it saved since it was installed (or its data last cleared) -->
+      <p class="older">{t("Photos saved before the app was reinstalled, or before its data was cleared, aren't shown here. They're still in your gallery, in the MinimalFrame album.")}</p>
     </div>
   {/if}
 
@@ -463,6 +465,15 @@
     flex: 1;
     overflow-y: auto;
     padding: 0 2px calc(var(--sp-3) + env(safe-area-inset-bottom));
+  }
+  .older {
+    max-width: 44ch;
+    margin: var(--sp-4) auto var(--sp-2);
+    padding: 0 var(--sp-3);
+    text-align: center;
+    font-size: var(--fs-label);
+    line-height: 1.5;
+    color: var(--muted);
   }
   h3 {
     padding: var(--sp-3) var(--sp-2) var(--sp-1);

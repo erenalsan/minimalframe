@@ -501,4 +501,20 @@ export default {
   "Keep": "Kalsın",
   "Delete": "Sil",
   "Share": "Paylaş",
+  // ── Landing: how it works
+  "How it works": "Nasıl çalışır",
+  "Open a photo": "Bir fotoğraf aç",
+  "Pick a frame": "Çerçeve seç",
+  "Save or share": "Kaydet ya da paylaş",
+  // ── Colour picker
+  "Color code": "Renk kodu",
+  "{name}: saturation and brightness": "{name}: doygunluk ve parlaklık",
+  "Photos saved before the app was reinstalled, or before its data was cleared, aren't shown here. They're still in your gallery, in the MinimalFrame album.": "Uygulama yeniden yüklenmeden ya da verileri silinmeden önce kaydedilen fotoğraflar burada görünmez. Hepsi hâlâ galerinde, MinimalFrame albümünde.",
+  // ── Colour memory
+  "Save color": "Rengi kaydet",
+  "Recent colors": "Son kullanılan renkler",
+  "Saved colors": "Kaydedilen renkler",
+  "Use {c}": "{c} kullan",
+  "Remove saved color {c}": "Kaydedilen {c} rengini kaldır",
+  "Saved": "Kaydedildi",
 };

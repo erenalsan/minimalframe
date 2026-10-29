@@ -502,4 +502,20 @@ export default {
   "Keep": "Behalten",
   "Delete": "Löschen",
   "Share": "Teilen",
+  // ── Landing: how it works
+  "How it works": "So funktioniert's",
+  "Open a photo": "Foto öffnen",
+  "Pick a frame": "Rahmen wählen",
+  "Save or share": "Speichern oder teilen",
+  // ── Colour picker
+  "Color code": "Farbcode",
+  "{name}: saturation and brightness": "{name}: Sättigung und Helligkeit",
+  "Photos saved before the app was reinstalled, or before its data was cleared, aren't shown here. They're still in your gallery, in the MinimalFrame album.": "Fotos, die vor einer Neuinstallation der App oder vor dem Löschen ihrer Daten gespeichert wurden, erscheinen hier nicht. Sie sind weiterhin in deiner Galerie, im Album MinimalFrame.",
+  // ── Colour memory
+  "Save color": "Farbe speichern",
+  "Recent colors": "Zuletzt verwendet",
+  "Saved colors": "Gespeicherte Farben",
+  "Use {c}": "{c} verwenden",
+  "Remove saved color {c}": "Gespeicherte Farbe {c} entfernen",
+  "Saved": "Gespeichert",
 };

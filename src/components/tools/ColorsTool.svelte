@@ -3,8 +3,11 @@
   import { QUICK_BACKGROUNDS } from "../../lib/catalog.js";
   import { tint } from "../../lib/palette.js";
   import { t } from "../../lib/i18n.svelte.js";
+  import ColorPicker from "../../lib/ColorPicker.svelte";
 
   let { frame = $bindable(), photoPalette } = $props();
+  let picking = $state(null); // "border" or "text": which colour the picker below is changing
+  const toggle = (which) => (picking = picking === which ? null : which);
 
   function savePalette() {
     const exists = palettes.some(
@@ -52,11 +55,12 @@
       {#each QUICK_BACKGROUNDS as c (c)}
         <button class="swatch" style:background={c} aria-pressed={frame.backgroundColor.toLowerCase() === c} aria-label={t("Border color {c}", { c })} onclick={() => (frame.backgroundColor = c)}></button>
       {/each}
-      <label class="swatch swatch-custom" title={t("Pick any color")}>
-        <input type="color" bind:value={frame.backgroundColor} />
-        <span class="sr-only">{t("Custom border color")}</span>
-      </label>
+      <!-- any colour: the current one inside a soft colour ring; opens the picker below -->
+      <button class="swatch swatch-custom" style:--c={frame.backgroundColor} aria-pressed={picking === "border"} aria-expanded={picking === "border"} title={t("Pick any color")} aria-label={t("Custom border color")} onclick={() => toggle("border")}></button>
     </div>
+    {#if picking === "border"}
+      <div class="pick"><ColorPicker label={t("Border color")} value={frame.backgroundColor} onchange={(c) => (frame.backgroundColor = c)} /></div>
+    {/if}
   </div>
   {#if photoPalette?.length}
     <div>
@@ -74,10 +78,15 @@
     {t("Pick text color automatically")}
   </label>
   {#if !frame.autoContrast}
-    <label class="color-row">
-      <input type="color" bind:value={frame.textColor} />
-      {t("Text color")} <span class="hint">{frame.textColor}</span>
-    </label>
+    <div>
+      <button class="color-row" aria-expanded={picking === "text"} onclick={() => toggle("text")}>
+        <span class="swatch" style:background={frame.textColor} aria-hidden="true"></span>
+        {t("Text color")} <span class="hint">{frame.textColor.toUpperCase()}</span>
+      </button>
+      {#if picking === "text"}
+        <div class="pick"><ColorPicker label={t("Text color")} value={frame.textColor} onchange={(c) => (frame.textColor = c)} /></div>
+      {/if}
+    </div>
   {/if}
   {#if palettes.length > 0}
     <div>
@@ -100,17 +109,21 @@
 <style>
   /* Colors (swatches: ui.css) */
   .swatch-custom {
-    cursor: pointer;
-    background: conic-gradient(#ff5c8a, #ffb13e, #e6ff3e, #3effa8, #3eb8ff, #8a3eff, #ff5c8a);
-    overflow: hidden;
+    background: conic-gradient(#f87171, #fbbf24, #a3e635, #34d399, #60a5fa, #a78bfa, #f472b6, #f87171);
+    box-shadow: none;
   }
-  .swatch-custom input {
-    opacity: 0;
+  .swatch-custom::after {
+    content: "";
     position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    cursor: pointer;
+    inset: 3px;
+    border-radius: 50%;
+    background: var(--c);
+    box-shadow:
+      0 0 0 1.5px var(--surface),
+      inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  .pick {
+    margin-top: var(--sp-2);
   }
   .pair {
     position: relative;
@@ -124,12 +137,10 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    min-height: 40px;
+    font-size: var(--fs-label);
   }
-  .color-row input {
-    width: 40px;
-    height: 32px;
-    border: 1px solid var(--glass-line);
-    border-radius: 8px;
-    background: none;
+  .color-row .hint {
+    font-family: "Space Mono", ui-monospace, monospace;
   }
 </style>
