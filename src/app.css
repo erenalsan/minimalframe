@@ -39,6 +39,10 @@
   --glass: var(--surface);
   --glass-strong: var(--surface);
   --glass-line: var(--line);
+  /* the Mat mark (header): Day, a dark print on a cream wall */
+  --mark-wall: #f7f6f1;
+  --mark-ink: #121212;
+  --mark-print: #121212;
   color-scheme: light only; /* "only": browsers must not force-darken our light theme */
 }
 /* Dark: the device's setting (unless the user picked Light), or the user's pick. The same values twice:
@@ -61,6 +65,9 @@
     --on-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
     --shadow-float: 0 2px 6px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
     --shadow-print: 0 35px 120px -20px rgb(0 0 0 / 0.9), 0 10px 40px -15px rgb(0 0 0 / 0.7);
+    --mark-wall: #0a0a0a; /* the Mat mark at Night: cream frame line, dark print */
+    --mark-ink: #f7f6f1;
+    --mark-print: #2c2a26;
     color-scheme: dark;
   }
 }
@@ -81,6 +88,9 @@
   --on-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
   --shadow-float: 0 2px 6px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
   --shadow-print: 0 35px 120px -20px rgb(0 0 0 / 0.9), 0 10px 40px -15px rgb(0 0 0 / 0.7);
+  --mark-wall: #0a0a0a; /* the Mat mark at Night: cream frame line, dark print */
+  --mark-ink: #f7f6f1;
+  --mark-print: #2c2a26;
   color-scheme: dark;
 }
 /* Switching theme: the old screen fades into the new one (theme.svelte.js) */

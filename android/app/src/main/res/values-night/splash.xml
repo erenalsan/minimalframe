@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Night: the app's dark background, no white flash at night -->
+    <color name="splash_background">#121212</color>
+</resources>
