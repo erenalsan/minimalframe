@@ -28,12 +28,14 @@ assert.equal(brandMark('SONY ILCE-7M3').parts[1].tint, undefined);
 assert.equal(brandMark('NIKON Z 6_2').parts[0].tint, undefined);
 
 // No logo file: the maker's name as text; unknown cameras: nothing.
-assert.deepEqual(brandMark('Apple iPhone 15 Pro'), { text: 'APPLE', parts: [] });
+assert.deepEqual(names(brandMark('Apple iPhone 15 Pro')), ['apple']); // the bitten apple, in the caption colour
+assert.equal(brandMark('Apple iPhone 15 Pro').parts[0].tint, true);
+assert.deepEqual(brandMark('Google Pixel 9'), { text: 'GOOGLE', parts: [] });
 assert.deepEqual(brandMark('Acme Cam 3000'), { text: '', parts: [] });
 assert.deepEqual(brandMark(''), { text: '', parts: [] });
 
 // Every logo the module can pick exists in public/brands/.
-for (const name of ['sony', 'sony-alpha', 'canon', 'nikon', 'fujifilm', 'leica', 'lumix', 'omsystem', 'ricoh', 'pentax', 'hasselblad']) {
+for (const name of ['sony', 'sony-alpha', 'canon', 'nikon', 'fujifilm', 'leica', 'lumix', 'omsystem', 'ricoh', 'pentax', 'hasselblad', 'apple']) {
   assert.ok(existsSync(new URL(`../../public/brands/${name}.svg`, import.meta.url)), `missing public/brands/${name}.svg`);
 }
 console.log('brandLogos: OK');

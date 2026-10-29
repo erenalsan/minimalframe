@@ -1,7 +1,7 @@
 // Camera-maker logos for the brand bar (files in public/brands/).
 // Source: Wikimedia Commons — Sony_logo.svg, Sony_Alpha_logo.svg, Canon_wordmark.svg, Nikon_Logo.svg,
 // Fujifilm_logo.svg, Leica_Camera_logo.svg, Lumix_logo.svg, OM-System-Logo.svg, Ricoh_logo_2005.svg,
-// Pentax_Logo.svg, Hasselblad_logo.svg. The artwork is public domain, but every logo is a trademark of its
+// Pentax_Logo.svg, Hasselblad_logo.svg, Apple_logo_black.svg. The artwork is public domain, but every logo is a trademark of its
 // owner; they're only used to say which camera took the photo.
 import { cameraBrand, cleanCamera } from "./exifCleaner.js";
 
@@ -20,11 +20,12 @@ const LOGOS = {
   ricoh: { aspect: 200 / 36, height: 0.9 },
   pentax: { aspect: 662 / 133, height: 0.95 },
   hasselblad: { aspect: 512 / 48, height: 0.6, tint: true },
+  apple: { aspect: 814 / 1000, height: 1.45, tint: true }, // the bitten apple, for iPhone photos
 };
 // Panasonic's cameras carry the LUMIX name.
 const BY_BRAND = {
   Sony: "sony", Canon: "canon", Nikon: "nikon", Fujifilm: "fujifilm", Leica: "leica", Panasonic: "lumix",
-  "OM System": "omsystem", Ricoh: "ricoh", Pentax: "pentax", Hasselblad: "hasselblad",
+  "OM System": "omsystem", Ricoh: "ricoh", Pentax: "pentax", Hasselblad: "hasselblad", Apple: "apple",
 };
 
 /**
