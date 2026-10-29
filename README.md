@@ -7,6 +7,9 @@
 [![PWA](https://img.shields.io/badge/PWA-works_offline-5A0FC8)](#get-it)
 [![Android](https://img.shields.io/badge/Android-7.0+-3DDC84?logo=android&logoColor=white)](#android-app)
 [![MIT licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/erenalsan/minimalframe?label=release&color=f59e0b)](https://github.com/erenalsan/minimalframe/releases/latest)
+
+**[⬇ Download for Android (APK)](https://github.com/erenalsan/minimalframe/releases/latest)**  ·  [Install it](#android-app)
 
 **Languages:** English · Türkçe · Deutsch  ·  **Themes:** light, dark or the device's own
 
@@ -105,7 +108,7 @@ The Android app (Capacitor) adds what a browser can't do:
 - opens photos, Fujifilm recipes and style codes shared from other apps;
 - shares through Android's own share menu.
 
-Signed release builds will be published on the [Releases](https://github.com/erenalsan/minimalframe/releases) page. Until then, build it yourself (see [Android](#android)).
+**Install:** download `MinimalFrame-0.1.0.apk` from the [latest release](https://github.com/erenalsan/minimalframe/releases/latest) on your phone and open it. If Android asks, allow your browser or Files app to install apps. Android 7.0 or newer. To build it yourself, see [Android](#android).
 
 ---
 
@@ -191,10 +194,10 @@ The English text is the key: `t("Export")` gives the Turkish or German version f
 
 ## Roadmap
 
-### Before the first release
+### First release (0.1.0)
 - [x] App icon and splash screen
 - [x] An animated first landing page
-- [ ] Version 0.1.0, a signed release APK on GitHub Releases
+- [x] Version 0.1.0, a signed release APK on [GitHub Releases](https://github.com/erenalsan/minimalframe/releases/latest)
 - [x] Privacy page: [PRIVACY.md](PRIVACY.md)
 
 ### Ideas for later
