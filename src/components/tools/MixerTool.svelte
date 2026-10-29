@@ -14,48 +14,60 @@
   }
   const bandChanged = (b) => dev.mixer[b].some((v) => v !== 0);
   const bandName = (b) => t(b[0].toUpperCase() + b.slice(1)); // "red" → t("Red")
+  const PROPS = $derived([
+    [t("Hue"), t("Shifts this color toward its neighbours on the color wheel."), "d-mix-h"],
+    [t("Saturation"), t("How intense this one color is."), "d-mix-s"],
+    [t("Luminance"), t("How bright this one color is."), "d-mix-l"],
+  ]);
 </script>
 
 <script module>
-  const ui = $state({ band: "red" });
+  const ui = $state({ band: "red", prop: 0 }); // prop: which slider phones show (0 hue, 1 saturation, 2 luminance)
 </script>
 
 <div class="stack">
   <div class="bands" role="group" aria-label={t("Color band")}>
     {#each MIXER_BANDS as b (b)}
       <button
-        class="band"
+        class="swatch band"
         class:changed={bandChanged(b)}
-        style:--c={MIXER_SWATCH[b]}
+        style:background={MIXER_SWATCH[b]}
         aria-pressed={ui.band === b}
         aria-label={bandName(b)}
         onclick={() => (ui.band = b)}
       ></button>
     {/each}
   </div>
-  <Dial id="d-mix-h" hint={t("Shifts this color toward its neighbours on the color wheel.")} label={t("{color} hue", { color: bandName(ui.band) })} bind:value={() => mixerValue(0), (v) => setMixer(0, v)} min={-100} max={100} reset={0} signed />
-  <Dial id="d-mix-s" hint={t("How intense this one color is.")} label={t("Saturation")} bind:value={() => mixerValue(1), (v) => setMixer(1, v)} min={-100} max={100} reset={0} signed />
-  <Dial id="d-mix-l" hint={t("How bright this one color is.")} label={t("Luminance")} bind:value={() => mixerValue(2), (v) => setMixer(2, v)} min={-100} max={100} reset={0} signed />
+  <div class="seg wrap picker" role="tablist" aria-label={t("Adjustment")}>
+    {#each PROPS as [name, , id], i (id)}
+      <button role="tab" aria-selected={ui.prop === i} aria-controls={id} onclick={() => (ui.prop = i)}>{name}</button>
+    {/each}
+  </div>
+  {#each PROPS as [name, hint, id], i (id)}
+    <div class="slot" class:picked={ui.prop === i}>
+      <Dial {id} {hint} label={i ? name : t("{color} hue", { color: bandName(ui.band) })} bind:value={() => mixerValue(i), (v) => setMixer(i, v)} min={-100} max={100} reset={0} signed />
+    </div>
+  {/each}
   <p class="hint">{t("Shift one color without touching the rest: warmer greens, deeper blue skies, softer skin.")}</p>
 </div>
 
 <style>
+  .picker {
+    display: none;
+  }
+  /* Compact layout (phones): one slider at a time, like Light. Same query as COMPACT in App.svelte. */
+  @media (max-width: 899px) and (min-height: 501px) {
+    .picker {
+      display: flex;
+    }
+    .slot:not(.picked) {
+      display: none;
+    }
+  }
   .bands {
     display: flex;
     justify-content: space-between;
     gap: 6px;
-  }
-  .band {
-    position: relative;
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    background: var(--c);
-    outline: 2px solid transparent;
-    outline-offset: 3px;
-  }
-  .band[aria-pressed="true"] {
-    outline-color: #fff;
   }
   .band.changed::after {
     /* dot marks bands you've adjusted */
@@ -67,6 +79,6 @@
     height: 4px;
     margin-left: -2px;
     border-radius: 50%;
-    background: #fff;
+    background: var(--text);
   }
 </style>

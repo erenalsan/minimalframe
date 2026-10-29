@@ -6,18 +6,21 @@
 
   let { points, onchange, color = "#fff", label = "Tone curve" } = $props();
 
-  const S = 256; // drawing size in SVG units
+  // Drawn in on-screen pixels: square on wide screens, wide and short in a phone's tray.
+  let W = $state(256);
+  let H = $state(256);
+  const P = 8; // inset, so the end points on the corners show whole and are easy to grab
+  const X = (f) => P + f * (W - 2 * P); // 0–1 input → px
+  const Y = (f) => H - P - f * (H - 2 * P); // 0–1 output → px
   const sorted = $derived([...points].sort((a, b) => a[0] - b[0]));
-  const path = $derived(
-    "M" + Array.from(curveLUT(points), (v, i) => `${(i / 255) * S} ${S - (v / 255) * S}`).join(" L"),
-  );
+  const path = $derived("M" + Array.from(curveLUT(points), (v, i) => `${X(i / 255)} ${Y(v / 255)}`).join(" L"));
 
   let svg;
   let dragIndex = -1;
   const clamp = (v) => Math.min(1, Math.max(0, v));
   const toPoint = (e) => {
     const r = svg.getBoundingClientRect();
-    return [clamp((e.clientX - r.left) / r.width), clamp(1 - (e.clientY - r.top) / r.height)];
+    return [clamp((e.clientX - r.left - P) / (r.width - 2 * P)), clamp(1 - (e.clientY - r.top - P) / (r.height - 2 * P))];
   };
 
   function update(i, [x, y]) {
@@ -59,10 +62,12 @@
   }
 </script>
 
+<!-- data-drag: dragging here moves points, never the tray it sits in (App.svelte) -->
+<div class="curve" data-drag bind:clientWidth={W} bind:clientHeight={H}>
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <svg
   bind:this={svg}
-  viewBox="0 0 {S} {S}"
+  viewBox="0 0 {W} {H}"
   role="application"
   aria-label={t("{label}: click to add a point, drag to move it", { label })}
   onpointerdown={down}
@@ -71,15 +76,15 @@
   onpointercancel={() => (dragIndex = -1)}
 >
   {#each [1, 2, 3] as q (q)}
-    <line x1={(q * S) / 4} y1="0" x2={(q * S) / 4} y2={S} class="grid" />
-    <line x1="0" y1={(q * S) / 4} x2={S} y2={(q * S) / 4} class="grid" />
+    <line x1={X(q / 4)} y1={Y(0)} x2={X(q / 4)} y2={Y(1)} class="grid" />
+    <line x1={X(0)} y1={Y(q / 4)} x2={X(1)} y2={Y(q / 4)} class="grid" />
   {/each}
-  <line x1="0" y1={S} x2={S} y2="0" class="diag" />
+  <line x1={X(0)} y1={Y(0)} x2={X(1)} y2={Y(1)} class="diag" />
   <path d={path} style:stroke={color} />
   {#each sorted as p, i (i)}
     <circle
-      cx={p[0] * S}
-      cy={S - p[1] * S}
+      cx={X(p[0])}
+      cy={Y(p[1])}
       r="7"
       style:fill={color}
       tabindex="0"
@@ -93,13 +98,26 @@
     />
   {/each}
 </svg>
+</div>
 
 <style>
+  .curve {
+    width: 100%;
+    aspect-ratio: 1;
+  }
+  /* Phones: the full width and whatever height the tray has left after the channel row
+     (the row's 38 + gap 16 + the tray's own padding 20, and 2 to spare for rounding), so the whole curve
+     shows without scrolling.
+     Same query as COMPACT in App.svelte. */
+  @media (max-width: 899px) and (min-height: 501px) {
+    .curve {
+      aspect-ratio: auto;
+      height: calc(var(--tray-max, 200px) - 76px);
+    }
+  }
   svg {
     width: 100%;
-    max-width: 30dvh; /* phones: the curve stays small enough to see the photo above it */
-    margin-inline: auto;
-    aspect-ratio: 1;
+    height: 100%;
     display: block;
     background: #1c1c20;
     border-radius: 12px;

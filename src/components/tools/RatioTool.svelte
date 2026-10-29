@@ -10,10 +10,13 @@
   const setSlides = (n) => (frame.slides = Math.min(10, Math.max(2, n)));
 </script>
 
-<div class="ratios">
+<!-- tiles, like looks and templates: the shape on top, its name below -->
+<div class="ratios fade-x">
   {#each RATIOS as r (r.id)}
     <button class="ratio" aria-pressed={frame.selectedRatioId === r.id} onclick={() => (frame.selectedRatioId = r.id)}>
-      <span class="ratio-glyph" class:loose={!r.w} style:aspect-ratio={r.w ? `${r.w} / ${r.h}` : r.id === "orig" ? "3 / 3.6" : r.id === "carousel" ? "12 / 5" : "3 / 2.4"}></span>
+      <span class="ratio-art">
+        <span class="ratio-glyph" class:loose={!r.w} style:aspect-ratio={r.w ? `${r.w} / ${r.h}` : r.id === "orig" ? "3 / 3.6" : r.id === "carousel" ? "12 / 5" : "3 / 2.4"}></span>
+      </span>
       <span>{t(r.label)}</span>
     </button>
   {/each}
@@ -62,24 +65,40 @@
   /* Ratios */
   .ratios {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px 10px;
   }
   .ratio {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-    border: 1px solid transparent;
-    font-size: 0.88rem;
-    text-align: left;
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    font-size: var(--fs-label);
+    line-height: 1.25;
+    text-align: center;
     color: var(--muted);
   }
+  .ratio-art {
+    display: grid;
+    place-items: center;
+    height: 56px;
+    border-radius: 10px;
+    background: var(--field);
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    transition: outline-color 150ms, scale 120ms;
+  }
+  /* pressed and hover: as every tile (ui.css, Touch and pointer feedback) */
+  .ratio:active .ratio-art {
+    scale: 0.96;
+  }
+  @media (hover: hover) {
+    .ratio:hover:not([aria-pressed="true"]) .ratio-art {
+      outline-color: color-mix(in srgb, var(--text) 30%, transparent);
+    }
+  }
   .ratio-glyph {
-    flex: none;
-    height: 24px;
+    height: 26px;
+    max-width: 80%;
     border: 2px solid currentColor;
     border-radius: 3px;
   }
@@ -87,31 +106,23 @@
     border-style: dashed;
   }
   .ratio[aria-pressed="true"] {
-    border-color: var(--accent-ink);
     color: var(--text);
   }
-  .ratio[aria-pressed="true"] .ratio-glyph {
-    color: var(--accent-ink);
-  }
-  @media (max-width: 600px) {
-    .ratio {
-      gap: 8px;
-      padding: 8px 10px;
-      font-size: 0.82rem;
-    }
+  .ratio[aria-pressed="true"] .ratio-art {
+    outline-color: var(--text);
   }
   /* Compact tray (phones, portrait tablets): one swipeable row, so the photo keeps the screen. Same query as COMPACT in App.svelte. */
   @media (max-width: 899px) and (min-height: 501px) {
     .ratios {
       display: flex;
+      gap: 10px;
       overflow-x: auto;
       scrollbar-width: none;
-      margin: 0 -14px;
-      padding: 2px 14px 4px;
+      margin: 0 calc(-1 * var(--sp-3));
+      padding: 4px var(--sp-3);
     }
     .ratio {
-      flex: none;
-      white-space: nowrap;
+      flex: 0 0 76px;
     }
   }
 </style>

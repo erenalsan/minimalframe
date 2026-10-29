@@ -13,8 +13,9 @@
   const film = $derived(frame.filmStyle);
 </script>
 
+<section>
 <p class="label">{t("Film")}</p>
-<div class="templates">
+<div class="templates fade-x">
   {#each FILM_PRESETS as p (p.id)}
     <div class="template">
       <button onclick={() => onapply(p)} aria-pressed={film === p.filmStyle} aria-label={t("Apply template {name}", { name: t(p.name) })}>
@@ -26,6 +27,7 @@
     </div>
   {/each}
 </div>
+</section>
 {#if film && film !== "darkroom"}
   <div class="film-opts sub">
     {#if film === "35mm"}
@@ -68,8 +70,9 @@
     </label>
   </div>
 {/if}
+<section>
 <p class="label">{t("Classic")}</p>
-<div class="templates">
+<div class="templates fade-x">
   {#each [...BUILTIN_PRESETS, ...userPresets] as p (p.id)}
     {@const r = frameRatio(p)}
     {@const f = allFonts().find((x) => x.id === p.selectedFontId) || SYSTEM_FONTS[0]}
@@ -93,6 +96,7 @@
     </div>
   {/each}
 </div>
+</section>
 <button class="btn ghost" onclick={onsave}>{t("Save current settings as a template")}</button>
 <details class="more">
   <summary>{t("More")}</summary>
@@ -107,12 +111,6 @@
 {#if libraryMessage}<p class="hint" role="status">{libraryMessage}</p>{/if}
 
 <style>
-  .more summary {
-    cursor: pointer;
-    font-size: 0.85rem;
-    color: var(--muted);
-    padding: 4px 0 8px;
-  }
   /* Templates */
   .templates {
     display: grid;
@@ -137,10 +135,17 @@
     gap: 7%;
     border-radius: 4px;
     box-shadow: 0 8px 18px -8px rgb(0 0 0 / 0.6);
-    transition: transform 150ms;
+    transition: scale 120ms, outline-color 150ms;
   }
-  .template > button:hover .template-mini {
-    transform: translateY(-2px);
+  /* pressed and hover: as every tile (ui.css, Touch and pointer feedback) */
+  .template > button:active .template-mini {
+    scale: 0.96;
+  }
+  @media (hover: hover) {
+    .template > button:hover:not([aria-pressed="true"]) .template-mini {
+      outline: 2px solid color-mix(in srgb, var(--text) 30%, transparent);
+      outline-offset: 2px;
+    }
   }
   .template-photo {
     flex: 1;
@@ -154,7 +159,9 @@
     overflow: hidden;
   }
   .template-name {
-    font-size: 0.8rem;
+    font-size: var(--fs-label);
+    line-height: 1.25;
+    text-align: center;
     color: var(--muted);
   }
   .template > button[aria-pressed="true"] .template-mini {
@@ -163,9 +170,6 @@
   }
   .template > button[aria-pressed="true"] .template-name {
     color: var(--text);
-  }
-  .label:not(:first-child) {
-    margin-top: 6px;
   }
   /* Film tiles: a tiny drawing of each border on its background */
   .film-mini {
@@ -218,22 +222,10 @@
     gap: 14px;
   }
   .swatches {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    flex-wrap: nowrap;
   }
   .swatches .label {
     margin: 0 auto 0 0;
-  }
-  .swatch {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    border: 1px solid var(--line);
-  }
-  .swatch[aria-pressed="true"] {
-    outline: 2px solid var(--text);
-    outline-offset: 2px;
   }
   /* Compact tray (phones, portrait tablets): one swipeable row, so the photo keeps the screen. Same query as COMPACT in App.svelte. */
   @media (max-width: 899px) and (min-height: 501px) {
@@ -242,8 +234,8 @@
       gap: 10px;
       overflow-x: auto;
       scrollbar-width: none;
-      margin: 0 -14px;
-      padding: 4px 14px;
+      margin: 0 calc(-1 * var(--sp-3));
+      padding: 4px var(--sp-3);
     }
     .template {
       flex: 0 0 84px;

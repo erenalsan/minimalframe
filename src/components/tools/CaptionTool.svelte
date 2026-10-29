@@ -57,11 +57,6 @@
     {t("Show camera details")}
   </label>
   {#if frame.showExif}
-    <label class="switch" title={t("Turns codes like ILCE-7RM4 or XF35mmF2 into Sony A7R IV and Fujifilm XF 35mm f/2")}>
-      <input type="checkbox" role="switch" bind:checked={frame.cleanNames} />
-      <span class="switch-track" aria-hidden="true"></span>
-      {t("Clean metadata names")}
-    </label>
     <div>
       <p class="label">{t("Layout")}</p>
       <div class="seg">
@@ -96,41 +91,7 @@
         {/each}
       </div>
     </div>
-    <div class="font-more">
-      {#if canBrowseLocalFonts}
-        {#if localFamilies.length}
-          <label class="label" for="local-font">{t("Fonts on this computer")}</label>
-          <input
-            id="local-font"
-            class="text"
-            list="local-font-list"
-            placeholder={t("Type to search {n} fonts", { n: localFamilies.length })}
-            onchange={(e) => useLocalFont(e.currentTarget.value)}
-          />
-          <datalist id="local-font-list">
-            {#each localFamilies as fam (fam)}<option value={fam}></option>{/each}
-          </datalist>
-        {:else}
-          <button class="btn ghost" onclick={browseLocalFonts}>{t("Use a font from this computer")}</button>
-        {/if}
-      {/if}
-      <label class="btn ghost upload-font">
-        {t("Upload a font file")}
-        <input type="file" accept=".ttf,.otf,.woff,.woff2" onchange={onFontFile} class="sr-only" />
-      </label>
-      {#if fontError}<p class="hint warn" role="alert">{fontError}</p>{/if}
-    </div>
 
-    <div>
-      <p class="label">{t("Size")}</p>
-      <div class="seg">
-        <button aria-pressed={frame.autoFontSize} onclick={() => (frame.autoFontSize = true)}>{t("Fit automatically")}</button>
-        <button aria-pressed={!frame.autoFontSize} onclick={() => (frame.autoFontSize = false)}>{t("Set by hand")}</button>
-      </div>
-    </div>
-    {#if !frame.autoFontSize}
-      <Dial id="d-font" label={t("Text size")} bind:value={frame.manualFontSize} min={10} max={80} reset={24} />
-    {/if}
     <div>
       <p class="label">{t("Alignment")}</p>
       <div class="seg">
@@ -146,6 +107,50 @@
         <button aria-pressed={frame.textZone === "top"} onclick={() => (frame.textZone = "top")}>{t("Above photo")}</button>
       </div>
     </div>
+    <div>
+      <p class="label">{t("Size")}</p>
+      <div class="seg">
+        <button aria-pressed={frame.autoFontSize} onclick={() => (frame.autoFontSize = true)}>{t("Fit automatically")}</button>
+        <button aria-pressed={!frame.autoFontSize} onclick={() => (frame.autoFontSize = false)}>{t("Set by hand")}</button>
+      </div>
+    </div>
+    {#if !frame.autoFontSize}
+      <Dial id="d-font" label={t("Text size")} bind:value={frame.manualFontSize} min={10} max={80} reset={24} />
+    {/if}
+    <details class="more">
+      <summary>{t("More")}</summary>
+      <div class="stack">
+        <label class="switch" title={t("Turns codes like ILCE-7RM4 or XF35mmF2 into Sony A7R IV and Fujifilm XF 35mm f/2")}>
+          <input type="checkbox" role="switch" bind:checked={frame.cleanNames} />
+          <span class="switch-track" aria-hidden="true"></span>
+          {t("Clean metadata names")}
+        </label>
+        <div class="font-more">
+          {#if canBrowseLocalFonts}
+            {#if localFamilies.length}
+              <label class="label" for="local-font">{t("Fonts on this computer")}</label>
+              <input
+                id="local-font"
+                class="text"
+                list="local-font-list"
+                placeholder={t("Type to search {n} fonts", { n: localFamilies.length })}
+                onchange={(e) => useLocalFont(e.currentTarget.value)}
+              />
+              <datalist id="local-font-list">
+                {#each localFamilies as fam (fam)}<option value={fam}></option>{/each}
+              </datalist>
+            {:else}
+              <button class="btn ghost" onclick={browseLocalFonts}>{t("Use a font from this computer")}</button>
+            {/if}
+          {/if}
+          <label class="btn ghost upload-font">
+            {t("Upload a font file")}
+            <input type="file" accept=".ttf,.otf,.woff,.woff2" onchange={onFontFile} class="sr-only" />
+          </label>
+          {#if fontError}<p class="hint warn" role="alert">{fontError}</p>{/if}
+        </div>
+      </div>
+    </details>
   {/if}
 </div>
 
@@ -165,7 +170,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.86rem;
+    font-size: var(--fs-label);
     color: var(--muted);
     cursor: pointer;
   }
@@ -181,28 +186,43 @@
   }
   .font {
     display: grid;
-    justify-items: center;
-    gap: 2px;
-    padding: 10px 4px 8px;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-    border: 1px solid transparent;
+    gap: 6px;
     min-width: 0;
   }
   .font-aa {
+    display: grid;
+    place-items: center;
+    height: 52px;
+    border-radius: 10px;
+    background: var(--field);
     font-size: 1.5rem;
     line-height: 1.1;
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    transition: outline-color 150ms, scale 120ms;
+  }
+  /* pressed and hover: as every tile (ui.css, Touch and pointer feedback) */
+  .font:active .font-aa {
+    scale: 0.96;
+  }
+  @media (hover: hover) {
+    .font:hover:not([aria-pressed="true"]) .font-aa {
+      outline-color: color-mix(in srgb, var(--text) 30%, transparent);
+    }
   }
   .font-name {
-    font-size: 0.72rem;
+    font-size: var(--fs-label);
     color: var(--muted);
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .font[aria-pressed="true"] {
-    border-color: var(--accent-ink);
+  .font[aria-pressed="true"] .font-aa {
+    outline-color: var(--text);
+  }
+  .font[aria-pressed="true"] .font-name {
+    color: var(--text);
   }
   .font-more {
     display: grid;

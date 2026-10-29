@@ -297,3 +297,70 @@ export function drawFilm(ctx, photo, L, o) {
     ctx.fill();
   }
 }
+
+/**
+ * The cover of a photo dump: every photo as a frame on 35 mm strips, printed on a sheet of paper, with a
+ * handwritten title. Few photos get two frames per strip, so they stay big. Photos are centre-cropped to the frame.
+ * @param {CanvasRenderingContext2D} ctx  a W × H canvas
+ * @param {CanvasImageSource[]} imgs  the photos, in order
+ * @param {{ ink: string, name: string, n: number, title: string, note: string, font: string }} o
+ *   edge print colour and film name, first frame number, the title and the line beside it, handwriting font
+ */
+export function drawContactSheet(ctx, W, H, imgs, o) {
+  const paper = "#f7f6f2";
+  ctx.fillStyle = paper;
+  ctx.fillRect(0, 0, W, H);
+  const per = imgs.length <= 4 ? 2 : 3;
+  const rows = Math.ceil(imgs.length / per);
+  const along = per * 38 + 4; // frames 36 mm + 2 mm gaps, 3 mm at each end
+  const head = 16, foot = 8; // mm for the title above, paper below
+  const u = Math.min((W * 0.92) / along, (H * 0.92) / (head + foot + rows * 38 - 3));
+  const x0 = (W - along * u) / 2;
+  const y0 = (H - (head + foot + rows * 38 - 3) * u) / 2;
+
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#3f3e3a";
+  ctx.font = `400 ${7 * u}px ${o.font}`;
+  ctx.textAlign = "left";
+  if (o.title) ctx.fillText(o.title, x0 + u, y0 + head * u * 0.72, along * u * 0.62);
+  ctx.fillStyle = "#6a6862";
+  ctx.font = `400 ${4.2 * u}px ${o.font}`;
+  ctx.textAlign = "right";
+  if (o.note) ctx.fillText(o.note, x0 + (along - 1) * u, y0 + head * u * 0.72, along * u * 0.34);
+
+  const pitch = 4.75 * u, hl = 2.79 * u, hc = 1.98 * u;
+  for (let r = 0; r < rows; r++) {
+    const sx = x0, sy = y0 + (head + r * 38) * u, sw = along * u;
+    ctx.fillStyle = STRIP;
+    ctx.fillRect(sx, sy, sw, 35 * u);
+    // sprocket holes: the paper shows through
+    ctx.fillStyle = paper;
+    ctx.beginPath();
+    for (let a = sx + 1.2 * u; a + hl < sx + sw; a += pitch) {
+      ctx.roundRect(a, sy + 2 * u, hl, hc, 0.45 * u);
+      ctx.roundRect(a, sy + 35 * u - 2 * u - hc, hl, hc, 0.45 * u);
+    }
+    ctx.fill();
+    for (let i = 0; i < per; i++) {
+      const k = r * per + i;
+      const fx = sx + (3 + i * 38) * u, fy = sy + 5.5 * u;
+      const img = imgs[k];
+      if (img?.width) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(fx, fy, 36 * u, 24 * u, 0.35 * u);
+        ctx.clip();
+        cover(ctx, img, fx, fy, 36 * u, 24 * u);
+        ctx.restore();
+      }
+      ctx.fillStyle = o.ink;
+      ctx.font = `condensed 700 ${1.4 * u}px ${EDGE_FONT}`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      const num = (Math.round(o.n) || 0) + k;
+      ctx.fillText(`▸ ${num}`, fx + 0.6 * u, sy + u);
+      if (i === 1 && o.name?.trim()) ctx.fillText(o.name.trim().toUpperCase(), fx + 9 * u, sy + u, 15 * u);
+      ctx.fillText(`${num}A`, fx + 19 * u, sy + 34 * u);
+    }
+  }
+}

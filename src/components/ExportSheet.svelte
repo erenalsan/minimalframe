@@ -29,6 +29,7 @@
     sizeLabel,
     slices,
     savesSeparately, // phones/tablets: separate images instead of a ZIP
+    postSlides = 0, // a photo dump: Share and Save take all its slides, in order
   } = $props();
   const QUALITY_NAMES = { good: "Good", high: "High", max: "Max" };
   const gpsCount = $derived(filesList.filter((f) => f.hadGps).length);
@@ -70,16 +71,16 @@
           {#if pendingShare}
             <button class="btn accent big" onclick={() => shareFiles(pendingShare)}><Icon name="share" />{t("Share now")}</button>
           {:else}
-            <button class="btn accent big" onclick={shareImage} disabled={!processedImage || isDownloading} autofocus>
+            <button class="btn accent big" onclick={() => (postSlides ? exportBatch("framed", true) : shareImage())} disabled={!processedImage || isDownloading} autofocus>
               <Icon name="share" />{isDownloading ? t("Preparing…") : t("Share to…")}
             </button>
           {/if}
         {/if}
-        <button class={canShareFiles ? "btn ghost" : "btn accent big"} onclick={() => downloadImage("framed")} disabled={!processedImage || isDownloading} autofocus={!canShareFiles}>
-          {isDownloading && !canShareFiles ? t("Exporting…") : slices > 1 ? t("Save {n} carousel slides", { n: slices }) : t("Save framed photo")}
+        <button class={canShareFiles ? "btn ghost" : "btn accent big"} onclick={() => (postSlides ? exportBatch("framed") : downloadImage("framed"))} disabled={!processedImage || isDownloading} autofocus={!canShareFiles}>
+          {isDownloading && !canShareFiles ? t("Exporting…") : postSlides ? t("Save all {n} slides", { n: postSlides * slices }) : slices > 1 ? t("Save {n} carousel slides", { n: slices }) : t("Save framed photo")}
         </button>
         <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>{t("Save photo only, without frame")}</button>
-        {#if filesList.length > 1}
+        {#if filesList.length > 1 && !postSlides}
           <button class="btn ghost" onclick={() => exportBatch("framed")} disabled={selectedCount === 0 || isDownloading}>
             {selectedCount === 1
               ? savesSeparately ? t("Save 1 framed photo") : t("Save 1 framed photo as ZIP")

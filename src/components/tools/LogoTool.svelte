@@ -105,7 +105,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.92rem;
+    font-size: var(--fs-label);
   }
   .upload {
     display: grid;
@@ -147,7 +147,8 @@
     object-fit: contain;
   }
   .logo-pick[aria-pressed="true"] {
-    border-color: var(--text);
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
   }
   .logo-add {
     border: 1.5px dashed color-mix(in srgb, var(--text) 30%, transparent);

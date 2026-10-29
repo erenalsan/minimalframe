@@ -74,6 +74,8 @@ export const ICONS = {
   add: "M12 5v14M5 12h14",
   globe: "M12 3a9 9 0 100 18 9 9 0 000-18zM3.5 9h17M3.5 15h17M12 3c-2.4 2.5-3.6 5.5-3.6 9s1.2 6.5 3.6 9M12 3c2.4 2.5 3.6 5.5 3.6 9s-1.2 6.5-3.6 9",
   upload: "M12 15V4M7 9l5-5 5 5M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4",
+  revert: "M4 12a8 8 0 102.3-5.6M4 4v4.5h4.5",
+  check: "M5 12.5l4.5 4.5L19 7.5",
 };
 
 export const EXIF_FIELDS = [

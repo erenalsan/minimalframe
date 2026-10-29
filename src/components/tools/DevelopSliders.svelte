@@ -51,11 +51,10 @@
   const picked = $state({ light: 0, color: 0, detail: 0, film: 0 });
 </script>
 
-<div class="chips" role="tablist" aria-label={t("Adjustment")}>
+<div class="seg wrap chips" role="tablist" aria-label={t("Adjustment")}>
   {#each g.sliders as s, i (s.key)}
     <button
       role="tab"
-      class="chip"
       class:changed={dev[s.key] !== s.reset}
       aria-selected={picked[group] === i}
       aria-controls={s.id}
@@ -93,29 +92,12 @@
   @media (max-width: 899px) and (min-height: 501px) {
     .chips {
       display: flex;
-      gap: 6px;
-      overflow-x: auto;
-      scrollbar-width: none;
-      margin: -2px -14px 0;
-      padding: 0 14px 2px;
     }
-    .chip {
-      flex: none;
+    .chips button {
       position: relative;
-      padding: 7px 13px;
-      border-radius: 999px;
-      font-size: 0.85rem;
-      font-weight: 550;
-      color: var(--muted);
-      background: var(--field);
-    }
-    .chip[aria-selected="true"] {
-      background: var(--on);
-      color: var(--text);
-      box-shadow: var(--on-shadow);
     }
     /* A dot marks adjustments that have been changed. */
-    .chip.changed::after {
+    .chips button.changed::after {
       content: "";
       position: absolute;
       top: 5px;

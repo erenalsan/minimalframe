@@ -37,7 +37,10 @@
   import { cleanCamera, cleanLens } from "./lib/exifCleaner.js";
   import { brandMark } from "./lib/brandLogos.js";
   import { computeFrameLayout, autoBorderAxis } from "./lib/frameLayout.js";
-  import { filmLayout, drawFilm } from "./lib/film.js";
+  import { filmLayout, drawFilm, drawContactSheet } from "./lib/film.js";
+  import { postSlides, composeLayout } from "./lib/dump.js";
+  import { reorder } from "./lib/reorder.js";
+  import PostOptions from "./components/PostOptions.svelte";
   import {
     CROP_DEFAULT,
     applyGeometry,
@@ -181,10 +184,13 @@
     if (!compact || !panelEl) return;
     const el = panelEl;
     let g = null;
+    // A finger that starts on something it drags (a curve point, a slider; marked data-drag) is working
+    // that control: pulling a curve point down must not close the tray.
+    const ownsDrag = (target) => target.closest?.('[data-drag], input[type="range"]');
     const down = (e) => {
       const body = el.querySelector(".body");
       const t = e.touches[0];
-      g = e.touches.length === 1 && (!body?.contains(e.target) || body.scrollTop <= 0) ? { x: t.clientX, y: t.clientY, on: false } : null;
+      g = e.touches.length === 1 && !ownsDrag(e.target) && (!body?.contains(e.target) || body.scrollTop <= 0) ? { x: t.clientX, y: t.clientY, on: false } : null;
     };
     const move = (e) => {
       if (!g) return;
@@ -412,8 +418,7 @@
       const ms = performance.now() - swipe.t;
       lastTap = ms < 250 && Math.hypot(dx, dy) < 10 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
       if (!pan && ms < 700 && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
-        const next = activeImageIndex + (dx < 0 ? 1 : -1);
-        if (next >= 0 && next < filesList.length) setActiveImage(next);
+        stepSlide(dx < 0 ? 1 : -1);
       }
     }
     swipe = pan = null;
@@ -654,6 +659,39 @@
 
   const ratio = $derived(frameRatio(frame));
   const slices = $derived(ratio?.slices ?? 1);
+
+  // ─── Photo dump (dump.js) ──────────────────────────────────────────────────
+  // The ticked photos posted as one carousel, in the strip's order: one per slide, in pairs or in a grid,
+  // optionally after a cover (all of them on a contact sheet). The frame goes around every slide.
+  const post = $state({ layout: "single", cover: false, title: "" }); // layout: "single" | "pairs" | "grid"
+  const postItems = $derived(filesList.filter((f) => f.selected));
+  const dumping = $derived(postItems.length > 1 && (post.layout !== "single" || post.cover));
+  const slideList = $derived(dumping ? postSlides(postItems, post.layout, post.cover) : []);
+  let coverShown = $state(false); // the cover is on screen (it has no photo of its own to be "active")
+  // The slide on screen: the cover, the slide holding the active photo, or that photo alone (not in the post).
+  const currentSlide = $derived(
+    coverShown && slideList[0]?.cover
+      ? slideList[0]
+      : (slideList.find((s) => !s.cover && s.items.includes(activeItem)) ?? { cover: false, items: activeItem ? [activeItem] : [] }),
+  );
+  function showCover() {
+    coverShown = true;
+    scheduleRender();
+  }
+  // Moves a photo in the strip (drag to reorder); the active photo stays active.
+  function reorderPhoto(from, to) {
+    if (from === to) return;
+    const active = activeItem;
+    const [item] = filesList.splice(from, 1);
+    filesList.splice(to, 0, item);
+    activeImageIndex = Math.max(0, filesList.indexOf(active));
+    scheduleRender();
+  }
+  // The cover's title: what you typed, else the month the first dated photo was taken.
+  function autoTitle(items) {
+    const taken = items.find((f) => f.camera?.taken)?.camera.taken;
+    return taken ? taken.toLocaleDateString(i18n.lang, { month: "long", year: "numeric" }) : "";
+  }
   // In a fixed ratio one border is filled by the ratio itself, so only the other slider is shown.
   // A 35 mm strip runs off the frame along its length, so only the space beside it is set.
   // shortcut: a sideways strip on a taller shape (4:5) gets its top and bottom from the shape, so that slider does
@@ -1217,6 +1255,7 @@
         found,
       );
       if (s.frame) applyFrame(s.frame); // after loading: opening photos resets the caption position
+      if (s.post) Object.assign(post, s.post);
       if (s.tab === "editor" || s.tab === "framing") activeTab = s.tab;
       activeImageIndex = Math.max(0, Math.min(s.active ?? 0, filesList.length - 1));
       scheduleRender(true);
@@ -1256,6 +1295,7 @@
         selected: f.selected,
       })),
       frame: frameSnapshot(),
+      post: $state.snapshot(post),
       active: activeImageIndex,
       tab: activeTab,
     };
@@ -1566,7 +1606,20 @@
 
   function setActiveImage(index) {
     activeImageIndex = index;
+    coverShown = false;
     scheduleRender(true);
+  }
+  // Swiping moves photo by photo; in a photo dump, slide by slide (the cover first).
+  function stepSlide(dir) {
+    const at = activeTab === "framing" ? slideList.indexOf(currentSlide) : -1;
+    if (at >= 0) {
+      const to = slideList[at + dir];
+      if (to?.cover) showCover();
+      else if (to) setActiveImage(filesList.indexOf(to.items[0]));
+      return;
+    }
+    const next = activeImageIndex + dir;
+    if (next >= 0 && next < filesList.length) setActiveImage(next);
   }
 
   // ─── Develop (GPU) ─────────────────────────────────────────────────────────
@@ -1683,7 +1736,8 @@
     return (lines.find((l) => l.type === "extra") ?? lines.find((l) => l.type === "model"))?.text ?? "";
   }
 
-  function filmObject(photo, film, item, reuse) {
+  // span: photos on this slide (a photo dump); the next frame is the photo after them.
+  function filmObject(photo, film, item, reuse, span = 1) {
     const c = reuse ? filmCanvas : document.createElement("canvas");
     c.width = film.w; // (also clears it)
     c.height = film.h;
@@ -1701,7 +1755,7 @@
       name: frame.filmName,
       n: frame.filmFrame + Math.max(0, i),
       prev: near(-1),
-      next: near(1),
+      next: near(span),
       stamp: frame.filmDate && taken ? `'${yy} ${taken.getMonth() + 1} ${taken.getDate()}` : "",
       month: taken ? `${taken.toLocaleDateString(i18n.lang, { month: "short" }).toUpperCase().replace(".", "")} · ${yy}` : "",
       note: filmNote(item),
@@ -1819,7 +1873,7 @@
     return c;
   }
 
-  function drawFramed(canvas, photo, item) {
+  function drawFramed(canvas, photo, item, span = 1) {
     const L = layoutFrame(photo.width, photo.height, item);
     if (canvas.width !== L.canvasW || canvas.height !== L.canvasH) {
       canvas.width = L.canvasW;
@@ -1828,7 +1882,7 @@
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = frame.backgroundColor;
     ctx.fillRect(0, 0, L.canvasW, L.canvasH);
-    const src = L.film ? filmObject(photo, L.film, item, canvas === canvasEl) : photo;
+    const src = L.film ? filmObject(photo, L.film, item, canvas === canvasEl, span) : photo;
     // Carousels fill the whole strip: the layout says which part of the photo to draw (L.crop).
     const { sx, sy, sw, sh } = L.crop ?? { sx: 0, sy: 0, sw: src.width, sh: src.height };
     ctx.drawImage(src, sx, sy, sw, sh, L.imgX, L.imgY, sw, sh);
@@ -1933,16 +1987,89 @@
    * - In "Photo Editor" mode: renders processedImage directly for clear color inspection.
    * - In "Frame & EXIF" mode: renders framing margins + manual editable EXIF typography.
    */
+  // ─── Photo dump slides ─────────────────────────────────────────────────────
+  const shrinkTo = (c, max) => {
+    const k = max / Math.max(c.width, c.height);
+    if (k >= 1) return c;
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(c.width * k));
+    out.height = Math.max(1, Math.round(c.height * k));
+    const g = out.getContext("2d", { alpha: false });
+    g.imageSmoothingQuality = "high";
+    g.drawImage(c, 0, 0, out.width, out.height);
+    return out;
+  };
+  // Another photo of the slide (or the cover), developed from its preview with its own edits and crop.
+  const devCache = new Map(); // `${id}|${max}` → { key, canvas }
+  function developedPreview(item, max = 1080, keep = true) {
+    if (item === activeItem && max >= 1080 && processedImage) return processedImage;
+    const id = `${item.id}|${max}`;
+    const key = JSON.stringify([item.dev, item.crop]);
+    const hit = devCache.get(id);
+    if (hit?.key === key) return hit.canvas;
+    const base = item.previewImage;
+    const src = Math.max(base.width, base.height) <= max ? base : base.linear ? downscaleLinear(base, max) : shrinkTo(base, max);
+    let c = applyDetail(developCanvas(src, document.createElement("canvas"), item.dev), item.dev);
+    if (!isIdentity(item.crop)) c = applyGeometry(c, item.crop);
+    if (keep) {
+      if (devCache.size > 40) devCache.clear(); // shortcut: forgets everything now and then instead of tracking removed photos
+      devCache.set(id, { key, canvas: c });
+    }
+    return c;
+  }
+  // Several photos joined into one picture (dump.js): the gap is the film's black, the card or the background.
+  function composeSlide(imgs, out = document.createElement("canvas")) {
+    const L = composeLayout(imgs.map((c) => ({ w: c.width, h: c.height })));
+    out.width = L.w;
+    out.height = L.h;
+    const ctx = out.getContext("2d");
+    ctx.fillStyle = ["35mm", "darkroom"].includes(frame.filmStyle) ? "#0b0b0c" : NOTE_STYLES.includes(frame.filmStyle) ? frame.filmCard : frame.backgroundColor;
+    ctx.fillRect(0, 0, L.w, L.h);
+    L.cells.forEach((c, i) => ctx.drawImage(imgs[i], c.sx, c.sy, c.sw, c.sh, c.x, c.y, c.w, c.h));
+    return out;
+  }
+  const slideCanvas = document.createElement("canvas"); // the preview's shared slide, reused
+  // The cover: every photo on a contact sheet, in the frame's shape (4:5 for a carousel or a free shape).
+  function drawCover(canvas, items, long, imgs) {
+    const ar = ratio?.w && slices === 1 ? ratio.w / ratio.h : 4 / 5;
+    canvas.width = Math.round(ar >= 1 ? long : long * ar);
+    canvas.height = Math.round(canvas.width / ar);
+    const taken = items.find((f) => f.camera?.taken)?.camera.taken;
+    const pad = (n) => String(n).padStart(2, "0");
+    const day = taken ? `${pad(taken.getDate())}.${pad(taken.getMonth() + 1)}.${String(taken.getFullYear()).slice(2)} · ` : "";
+    drawContactSheet(canvas.getContext("2d"), canvas.width, canvas.height, imgs, {
+      ink: frame.filmInk,
+      name: frame.filmName,
+      n: frame.filmFrame,
+      title: post.title.trim() || autoTitle(items),
+      note: `${day}${items.length}`,
+      font: '"Caveat", cursive',
+    });
+    return canvas;
+  }
+  const COVER_FONT = '400 40px "Caveat"';
+
   function renderCanvas() {
     if (!canvasEl || !processedImage || !activeItem) return;
-    const srcW = processedImage.width;
-    const srcH = processedImage.height;
+    const slide = activeTab === "framing" ? currentSlide : null;
+    if (slide?.cover) {
+      drawCover(canvasEl, slide.items, 1350, slide.items.map((f) => developedPreview(f, 540)));
+      if (!document.fonts.check(COVER_FONT)) document.fonts.load(COVER_FONT).then(() => scheduleRender());
+      framedSize = photoSize = { w: canvasEl.width, h: canvasEl.height };
+      canvasAspect = canvasEl.width / canvasEl.height;
+      return;
+    }
+    const group = slide?.items.length > 1 ? slide.items : null;
+    const photo = group ? composeSlide(group.map((f) => developedPreview(f)), slideCanvas) : processedImage;
+    const lead = group ? group[0] : activeItem; // a shared slide takes its caption from its first photo
+    const srcW = photo.width;
+    const srcH = photo.height;
     const fullScale =
       (activeItem.fullW || activeItem.previewImage.width) /
       activeItem.previewImage.width;
 
     // Full-resolution sizes for the info line and the export sheet.
-    const L = layoutFrame(srcW, srcH, activeItem);
+    const L = layoutFrame(srcW, srcH, lead);
     framedSize = {
       w: Math.round(L.canvasW * fullScale),
       h: Math.round(L.canvasH * fullScale),
@@ -1958,8 +2085,8 @@
       canvasEl.height = srcH;
       canvasEl.getContext("2d").drawImage(processedImage, 0, 0);
     } else {
-      drawFramed(canvasEl, processedImage, activeItem);
-      captionFonts(activeItem)?.then(() => scheduleRender());
+      drawFramed(canvasEl, photo, lead, group?.length ?? 1);
+      captionFonts(lead)?.then(() => scheduleRender());
     }
     canvasAspect = canvasEl.width / canvasEl.height;
   }
@@ -1993,14 +2120,15 @@
     const _ov = JSON.stringify(activeItem?.exifOverride);
     const _fill = JSON.stringify(activeItem?.fill);
     const _limg = logoImage;
+    const _post = JSON.stringify(post);
+    const _slide = currentSlide;
 
     scheduleRender(false);
   });
 
   // ─── Full-resolution export ────────────────────────────────────────────────
-  async function generateFullResExportCanvas(item, mode = "framed") {
-    if (!item) return null;
-
+  // 1–2 of an export: the full-size photo decoded, developed, detailed and cropped.
+  async function developFull(item) {
     // 1–2. Decode the full-res original on demand (only one lives in memory at a time) and develop it
     //      with the same shader as the preview, in tiles.
     let colorCanvas;
@@ -2032,6 +2160,12 @@
       colorCanvas.width = colorCanvas.height = 0;
       colorCanvas = turned;
     }
+    return colorCanvas;
+  }
+
+  async function generateFullResExportCanvas(item, mode = "framed") {
+    if (!item) return null;
+    let colorCanvas = await developFull(item);
 
     // Size preset: shrink before grain and bloom so they keep their look at small sizes.
     const k = exportScale(
@@ -2072,13 +2206,57 @@
     return framed;
   }
 
-  /** Cuts a carousel frame into equal slides (the last one takes any rounding remainder). */
+  // A shared slide at full size: each photo developed alone (one full-size photo in memory at a time) and
+  // kept at most 2400 px, then joined at the export size; grain and glow are each photo's own.
+  async function generateSlideCanvas(items) {
+    const parts = [];
+    for (const item of items) {
+      const c = await developFull(item);
+      const small = shrinkTo(c, 2400);
+      if (small !== c) c.width = c.height = 0;
+      parts.push(small);
+    }
+    const L = composeLayout(parts.map((c) => ({ w: c.width, h: c.height })));
+    const k = exportScale(L.w, L.h, "framed", items[0]);
+    const cells = parts.map((c, i) => {
+      const cell = L.cells[i];
+      const out = document.createElement("canvas");
+      out.width = Math.max(1, Math.round(cell.w * k));
+      out.height = Math.max(1, Math.round(cell.h * k));
+      const g = out.getContext("2d", { alpha: false });
+      g.imageSmoothingQuality = "high";
+      g.drawImage(c, cell.sx, cell.sy, cell.sw, cell.sh, 0, 0, out.width, out.height);
+      c.width = c.height = 0;
+      const d = items[i].dev;
+      if (d.softBloom > 0 || d.filmGrain > 0) applyAnalogEffects(out, { grain: d.filmGrain, bloom: d.softBloom });
+      return out;
+    });
+    const joined = composeSlide(cells);
+    for (const c of cells) c.width = c.height = 0;
+    await captionFonts(items[0]);
+    const framed = drawFramed(document.createElement("canvas"), joined, items[0], items.length);
+    joined.width = joined.height = 0;
+    return framed;
+  }
+
+  // The cover at the export size; its frames come from the photos' previews (each is a third of the slide).
+  async function renderCover(items, name) {
+    await document.fonts.load(COVER_FONT);
+    const s = EXPORT_SIZES.find((x) => x.id === exportPrefs.size);
+    const ar = ratio?.w && slices === 1 ? ratio.w / ratio.h : 4 / 5;
+    const long = s?.width ? (ar >= 1 ? s.width : s.width / ar) : (s?.long ?? 3240);
+    const canvas = drawCover(document.createElement("canvas"), items, long, items.map((f) => developedPreview(f, 1080, false)));
+    const { blob, ext } = await encodeCanvas(canvas);
+    canvas.width = canvas.height = 0;
+    return [{ name: `${name}.${ext}`, blob }];
+  }
 
   /** Renders one photo for export: one file, or one per slide for carousel ratios. */
-  async function renderFiles(item, mode, index = 0) {
-    const canvas = await generateFullResExportCanvas(item, mode);
+  // group: the photos sharing this slide of a photo dump; name: the file name to use (without extension).
+  async function renderFiles(item, mode, index = 0, group = null, name = null) {
+    const canvas = group ? await generateSlideCanvas(group) : await generateFullResExportCanvas(item, mode);
     if (!canvas) throw new Error("could not render the photo");
-    const base = `${cleanName(item.name, `photo_${index + 1}`)}_${mode === "edited" ? "edited" : "framed"}`;
+    const base = name ?? `${cleanName(item.name, `photo_${index + 1}`)}_${mode === "edited" ? "edited" : "framed"}`;
     const n = mode === "framed" ? slices : 1;
     const parts = n > 1 ? sliceCanvas(canvas, n) : [canvas];
     const files = [];
@@ -2266,11 +2444,14 @@
   }
 
   // ─── Batch export (separate images on phones/tablets, one ZIP on desktop) ───────────────────────────────────────────────────
-  async function exportBatch(mode = "framed") {
-    const batch = filesList.filter((item) => item.selected);
+  // A photo dump exports its slides in posting order (and can share them all at once).
+  async function exportBatch(mode = "framed", share = false) {
+    const asPost = dumping && mode === "framed";
+    const batch = asPost ? slideList : filesList.filter((item) => item.selected).map((item) => ({ cover: false, items: [item] }));
     if (batch.length === 0) return;
     isBatchExporting = true;
     const total = batch.length;
+    const stamp = new Date().toISOString().slice(0, 10);
     batchProgress = { current: 0, total, percent: 0, filename: "" };
     try {
       const files = [];
@@ -2279,10 +2460,17 @@
           current: i + 1,
           total,
           percent: Math.round(((i + 1) / total) * 100),
-          filename: batch[i].name,
+          filename: batch[i].cover ? t("Cover slide") : batch[i].items.map((f) => f.name).join(", "),
         };
         await new Promise((r) => setTimeout(r, 20)); // let the progress bar paint
-        files.push(...(await renderFiles(batch[i], mode, i)));
+        const { cover, items } = batch[i];
+        const name = asPost ? `MinimalFrame_${stamp}_${String(i + 1).padStart(2, "0")}of${String(total).padStart(2, "0")}` : null;
+        files.push(...(cover ? await renderCover(items, name) : await renderFiles(items[0], mode, i, asPost && items.length > 1 ? items : null, name)));
+      }
+      if (share) {
+        await shareFiles(files);
+        if (pendingShare) downloadStatus = t("Ready to share");
+        return;
       }
       batchProgress.filename = savesSeparately ? t("Saving…") : t("Packing the ZIP…");
       const name = `MinimalFrame_${new Date().toISOString().slice(0, 10)}_${total}photos.zip`;
@@ -2515,9 +2703,16 @@
 
   {#if started}
     <nav class="strip" class:single={filesList.length === 1} aria-label={t("Your photos")}>
-      <ol>
+      <ol use:reorder={{ onmove: reorderPhoto }}>
+        {#if dumping && post.cover}
+          <li class="frame" class:active={coverShown}>
+            <button class="frame-pick frame-cover" onclick={showCover} aria-current={coverShown ? "true" : undefined} aria-label={t("Cover slide")}>
+              <i></i><i></i>
+            </button>
+          </li>
+        {/if}
         {#each filesList as item, i (item.id)}
-          <li class="frame" class:active={activeImageIndex === i}>
+          <li class="frame" class:active={activeImageIndex === i && !(coverShown && dumping && post.cover)} data-index={i}>
             <button
               class="frame-pick"
               onclick={() => setActiveImage(i)}
@@ -2549,6 +2744,7 @@
       {#if filesList.length > 1}<p class="strip-note">
           {t("{n} of {total} in batch", { n: selectedCount, total: filesList.length })}
         </p>{/if}
+      {#if selectedCount > 1}<PostOptions bind:post={() => post, keep} count={selectedCount} autoTitle={autoTitle(postItems)} row />{/if}
     </nav>
 
     <nav class="rail" aria-label={t("Tools")}>
@@ -2573,14 +2769,15 @@
       aria-label={t("{tool} settings", { tool: t(TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1]) })}>
       <div class="panel-head">
         <div>
-          <h2>{compact && trayView === "photos" ? t("Photos") : t(TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1])}</h2>
+          <!-- phones: the tool's name is already lit up in the tab row below, so only Photos shows its title -->
+          <h2 class:sr-only={compact && trayView !== "photos"}>{compact && trayView === "photos" ? t("Photos") : t(TOOLS[activeTab].find(([id]) => id === activeTool[activeTab])[1])}</h2>
           <p class="tool-hint">{t(TOOL_HINTS[activeTool[activeTab]])}</p>
         </div>
         <div class="head-actions">
           {#if activeTab === "editor" && activeItem && !(compact && trayView === "photos")}
-            <button class="btn ghost revert" onclick={revertPhoto} disabled={!edited} title={t("Remove every edit and the crop from this photo")}>{t("Revert")}</button>
+            <button class="btn ghost revert" onclick={revertPhoto} disabled={!edited} title={t("Remove every edit and the crop from this photo")}><Icon name="revert" /><span class="btn-label">{t("Revert")}</span></button>
           {/if}
-          <button class="btn ink done" onclick={closeTray}>{t("Done")}</button>
+          <button class="btn ink done" onclick={closeTray} title={t("Done")}><Icon name="check" /><span class="sr-only">{t("Done")}</span></button>
         </div>
       </div>
 
@@ -2588,10 +2785,16 @@
         {#if compact && trayView === "photos"}
           <PhotosTray
             bind:filesList
+            bind:post={() => post, keep}
             activeIndex={activeImageIndex}
+            coverOn={dumping && post.cover}
+            coverShown={coverShown && dumping && post.cover}
+            autoTitle={autoTitle(postItems)}
             onpick={(i) => (setActiveImage(i), closeTray())}
+            onpickcover={() => (showCover(), closeTray())}
             onremove={removeImage}
             onadd={() => fileInput?.click()}
+            onmove={reorderPhoto}
           />
         {:else if activeTab === "editor" && !activeItem}
           <p class="tool-hint">{t("Add a photo to edit it.")}</p>
@@ -2711,6 +2914,7 @@
     {sizeLabel}
     {slices}
     {savesSeparately}
+    postSlides={dumping ? slideList.length : 0}
   />
 
 
@@ -3157,6 +3361,20 @@
   .frame-del:focus-visible {
     opacity: 1;
   }
+  /* the cover: a tiny contact sheet */
+  .frame-cover {
+    width: 46px;
+    background: #f7f6f2;
+    display: grid;
+    align-content: center;
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .frame-cover i {
+    height: 12px;
+    background: #0b0b0c;
+    border-radius: 1px;
+  }
   .frame-add {
     width: 56px;
     height: 56px;
@@ -3237,8 +3455,8 @@
   .panel-head {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
-    padding: 18px 18px 4px;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-3) 4px;
   }
   .panel-head h2 {
     font-size: 1.05rem;
@@ -3253,29 +3471,32 @@
     flex: none;
   }
   .revert {
-    padding: 7px 14px;
+    padding: 7px 14px 7px 11px;
+    gap: 6px;
     font-size: 0.85rem;
+  }
+  .revert :global(svg) {
+    width: 16px;
+    height: 16px;
   }
   .tool-hint {
     margin-top: 3px;
-    font-size: 0.8rem;
+    font-size: var(--fs-label);
     line-height: 1.4;
     color: var(--muted);
   }
   .done {
     display: none;
     margin-left: auto;
-    padding: 7px 18px;
-    font-size: 0.88rem;
   }
   .body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 14px 18px 22px;
+    padding: var(--sp-2) var(--sp-3) var(--sp-4);
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: var(--sp-4);
     scrollbar-width: thin;
   }
   /* Each tool's controls slide in when they appear (tool switch, mode switch, tray opening). */
@@ -3537,9 +3758,40 @@
     .rail {
       z-index: 2; /* the tray slides out from behind it */
     }
+    /* One slim row: the grab bar in the middle, Revert and Done as round icon buttons on the right. */
+    .panel {
+      position: relative;
+      --tray-max: max(26dvh, 200px); /* the tray's body at most (see .body) */
+    }
+    .panel::before {
+      position: absolute;
+      top: 6px;
+      left: 50%;
+      translate: -50% 0;
+      margin: 0;
+    }
     .panel-head {
       align-items: center;
-      padding: 8px 10px 0 16px;
+      padding: 4px 10px 0 var(--sp-3);
+    }
+    .done,
+    .revert {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+    }
+    .done :global(svg),
+    .revert :global(svg) {
+      width: 20px;
+      height: 20px;
+    }
+    .revert .btn-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
     /* Phones: no explanations in the tray (each slider's ⓘ still has one); messages with a role stay. */
     .body :global(.hint:not([role]):not(.warn)) {
@@ -3549,12 +3801,14 @@
       font-size: 0.95rem;
     }
     .done {
-      display: block;
+      display: inline-flex;
     }
     .body {
-      max-height: 26dvh; /* about a quarter of the screen at most: the photo is what you're looking at */
-      padding: 10px 14px 12px;
-      gap: 12px;
+      /* about a quarter of the screen at most: the photo is what you're looking at; on small phones enough
+         for a tool's controls without scrolling (Crop's rotate row) */
+      max-height: var(--tray-max);
+      padding: var(--sp-1) var(--sp-3) var(--sp-2);
+      gap: var(--sp-3);
     }
     /* Rows inside a scrolling tray must keep their size (flex would squash sideways-scrolling rows). */
     .body > :global(*) {

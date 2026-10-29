@@ -98,25 +98,7 @@
 </div>
 
 <style>
-  /* Colors */
-  .swatches {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .swatch {
-    position: relative;
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 25%, transparent);
-    display: grid;
-    place-items: center;
-  }
-  .swatch[aria-pressed="true"] {
-    outline: 2px solid var(--accent-ink);
-    outline-offset: 3px;
-  }
+  /* Colors (swatches: ui.css) */
   .swatch-custom {
     cursor: pointer;
     background: conic-gradient(#ff5c8a, #ffb13e, #e6ff3e, #3effa8, #3eb8ff, #8a3eff, #ff5c8a);

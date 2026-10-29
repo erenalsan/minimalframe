@@ -1,5 +1,6 @@
 <script>
   import { t } from "./i18n.svelte.js";
+  import Icon from "../components/Icon.svelte";
   // Glass-style slider. Native <input type="range"> underneath,
   // so keyboard, screen readers and rAF-throttled rendering keep working unchanged.
   let {
@@ -12,7 +13,7 @@
     reset = undefined, // double-tap target; omitted = no reset
     signed = false, // show "+" for positive values (bipolar sliders)
     track = undefined, // optional CSS gradient for the track (e.g. cool → warm)
-    hint = "", // one-line explanation, shown on tap (touch has no hover tooltips)
+    hint = "", // one-line explanation, shown by tapping the label (touch has no hover tooltips)
     id,
   } = $props();
 
@@ -24,6 +25,8 @@
     (signed && value > 0 ? "+" : "") + Number(value).toFixed(decimals),
   );
   const canReset = $derived(reset !== undefined && value !== reset);
+  // room for the longest value this slider can show, so the number (and Reset beside it) never shifts
+  const widest = $derived(Math.max(...[min, max].map((v) => ((signed && v > 0 ? "+" : "") + Number(v).toFixed(decimals)).length)));
   let hintOpen = $state(false);
 
   // Touch: double-tap the slider to reset it (dblclick only comes from a mouse). Two quick taps, not drags.
@@ -57,18 +60,11 @@
 
 <div class="dial">
   <div class="dial-head">
-    <label for={id}>{label}</label>
-    {#if hint}
-      <button
-        type="button"
-        class="dial-info"
-        title={hint}
-        aria-label={t("What does {label} do?", { label })}
-        aria-expanded={hintOpen}
-        onclick={() => (hintOpen = !hintOpen)}>i</button>
-    {/if}
-    {#if canReset}
-      <button type="button" class="dial-reset" onclick={() => (value = reset)}>{t("Reset")}</button>
+    <!-- a label with an explanation is dotted-underlined; tapping it shows the explanation -->
+    <label for={id} class:has-hint={hint} title={hint || undefined} onclick={() => hint && (hintOpen = !hintOpen)}>{label}</label>
+    <!-- Reset keeps its place even while hidden, so nothing in the panel moves when it appears -->
+    {#if reset !== undefined}
+      <button type="button" class="pill-reset dial-reset" class:shown={canReset} inert={!canReset} onclick={() => (value = reset)}><Icon name="revert" />{t("Reset")}</button>
     {/if}
     <output
       for={id}
@@ -78,7 +74,7 @@
       onpointermove={scrubMove}
       onpointerup={() => (scrub = null)}
       onpointercancel={() => (scrub = null)}
-    >{shown}<small>{unit}</small></output>
+    ><span class="num" style:min-width="{widest}ch">{shown}</span><small>{unit}</small></output>
   </div>
   <input
     {id}
@@ -105,12 +101,18 @@
   }
   .dial-head {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
   }
   label {
-    font-size: 0.9rem;
+    font-size: var(--fs-label);
     color: var(--text);
+  }
+  label.has-hint {
+    cursor: help;
+    text-decoration: underline dotted color-mix(in srgb, var(--text) 35%, transparent);
+    text-underline-offset: 4px;
   }
   output {
     margin-left: auto;
@@ -120,49 +122,33 @@
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
-    font-weight: 650;
-    font-size: 0.95rem;
+    font-weight: 600;
+    font-size: var(--fs-value);
     font-variant-numeric: tabular-nums;
     color: var(--muted);
   }
   output.changed {
-    color: var(--accent-ink, var(--accent));
+    color: var(--text);
+  }
+  .num {
+    display: inline-block;
+    text-align: right;
   }
   output small {
     font-size: 0.75rem;
     font-weight: 500;
     margin-left: 2px;
   }
+  /* the same ↺ as Revert at the top: one symbol for "back to how it was" everywhere (look: ui.css) */
   .dial-reset {
-    font-size: 0.78rem;
-    color: var(--muted);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-    padding: 2px;
+    margin-left: auto;
   }
-  .dial-reset:hover {
-    color: var(--text);
-  }
-  .dial-info {
-    display: grid;
-    place-items: center;
-    width: 16px;
-    height: 16px;
-    margin-left: -4px;
-    border-radius: 50%;
-    border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
-    font: italic 650 0.66rem/1 Georgia, serif;
-    color: var(--muted);
-    align-self: center;
-  }
-  .dial-info:hover,
-  .dial-info[aria-expanded="true"] {
-    color: var(--text);
-    border-color: var(--accent-ink, var(--accent));
+  .dial-reset + output {
+    margin-left: 0;
   }
   .dial-hint {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: var(--fs-label);
     line-height: 1.4;
     color: var(--muted);
   }
@@ -185,8 +171,8 @@
   }
   input::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     background: #fff;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 6px rgb(0 0 0 / 0.3);
@@ -196,8 +182,8 @@
     transform: scale(1.15);
   }
   input::-moz-range-thumb {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     border: 0;
     border-radius: 50%;
     background: #fff;

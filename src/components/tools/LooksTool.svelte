@@ -180,7 +180,7 @@
   const thumbCache = new WeakMap();
 </script>
 
-<div class="looks">
+<div class="looks fade-x">
   {#if canDevelop && item?.small}
     <div class="look-cell">
       <button class="look auto" aria-pressed={autoLook ? isLookActive(autoLook) : false} disabled={!autoLook} onclick={() => applyLook(autoLook)} title={t("Fixes brightness, contrast, white balance and colour for this photo")}>
@@ -217,7 +217,7 @@
   <section class="sub">
     <p class="label">LUTs</p>
     <p class="hint">{t("Import .cube files from Lightroom, Resolve or your favourite creators.")}</p>
-    <div class="looks">
+    <div class="looks fade-x">
       {#each lutLib.list as l (l.id)}
         <div class="look-cell">
           <button class="look" aria-pressed={dev.lut === l.id} onclick={() => (dev.lut = dev.lut === l.id ? "" : l.id)}>
@@ -302,7 +302,7 @@
   .look {
     display: grid;
     gap: 6px;
-    font-size: 0.8rem;
+    font-size: var(--fs-label);
     color: var(--muted);
   }
   .look img {
@@ -312,7 +312,16 @@
     border-radius: 12px;
     outline: 2px solid transparent;
     outline-offset: 2px;
-    transition: outline-color 150ms;
+    transition: outline-color 150ms, scale 120ms;
+  }
+  /* pressed and hover: as every tile (ui.css, Touch and pointer feedback) */
+  .look:active img {
+    scale: 0.96;
+  }
+  @media (hover: hover) {
+    .look:hover:not([aria-pressed="true"]) img {
+      outline-color: color-mix(in srgb, var(--text) 30%, transparent);
+    }
   }
   .look[aria-pressed="true"] {
     color: var(--text);
@@ -336,7 +345,7 @@
     border: 1px dashed color-mix(in srgb, var(--text) 30%, transparent);
     border-radius: 12px;
     color: var(--muted);
-    font-size: 0.78rem;
+    font-size: var(--fs-label);
     text-align: center;
     cursor: pointer;
   }
@@ -383,8 +392,8 @@
       gap: 10px;
       overflow-x: auto;
       scrollbar-width: none;
-      margin: 0 -14px;
-      padding: 2px 14px 4px;
+      margin: 0 calc(-1 * var(--sp-3));
+      padding: 2px var(--sp-3) 4px;
     }
     .looks > :global(*) {
       flex: 0 0 74px;

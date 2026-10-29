@@ -419,7 +419,6 @@ export default {
   "Story poster": "Story-Poster",
 
   // ── Regler, Histogramm
-  "What does {label} do?": "Was macht {label}?",
   "Reset": "Zurücksetzen",
   "Drag sideways to fine-tune": "Seitlich ziehen zur Feinabstimmung",
   "Histogram of the edited photo": "Histogramm des bearbeiteten Fotos",
@@ -444,4 +443,16 @@ export default {
   "Black": "Schwarz",
   "Photo in a 35 mm film strip with sprocket holes and edge print": "Foto in einem 35-mm-Filmstreifen mit Perforation und Randbeschriftung",
   "Photo as an instant print with a handwritten line": "Foto als Sofortbild mit einer handschriftlichen Zeile",
+  // ── Photo dump
+  "Post them as": "Posten als",
+  "One each": "Einzeln",
+  "Pairs": "Paare",
+  "Grid": "Raster",
+  "1 slide": "1 Slide",
+  "{n} slides": "{n} Slides",
+  "Cover slide": "Titelslide",
+  "Cover title": "Titel",
+  "Save all {n} slides": "Alle {n} Slides speichern",
+  "Hold a photo and drag it to change the order.": "Halte ein Foto gedrückt und ziehe es, um die Reihenfolge zu ändern.",
+  "Hue": "Farbton",
 };

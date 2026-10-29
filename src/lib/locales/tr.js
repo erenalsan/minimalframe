@@ -418,7 +418,6 @@ export default {
   "Story poster": "Hikâye posteri",
 
   // ── Slider, histogram
-  "What does {label} do?": "{label} ne işe yarar?",
   "Reset": "Sıfırla",
   "Drag sideways to fine-tune": "İnce ayar için yana sürükle",
   "Histogram of the edited photo": "Düzenlenmiş fotoğrafın histogramı",
@@ -443,4 +442,16 @@ export default {
   "Black": "Siyah",
   "Photo in a 35 mm film strip with sprocket holes and edge print": "Delikleri ve kenar yazısıyla 35 mm film şeridinde fotoğraf",
   "Photo as an instant print with a handwritten line": "El yazısı bir satırla anlık baskı olarak fotoğraf",
+  // ── Photo dump
+  "Post them as": "Şöyle paylaş",
+  "One each": "Tek tek",
+  "Pairs": "İkili",
+  "Grid": "Izgara",
+  "1 slide": "1 slayt",
+  "{n} slides": "{n} slayt",
+  "Cover slide": "Kapak slaytı",
+  "Cover title": "Kapak başlığı",
+  "Save all {n} slides": "{n} slaytın hepsini kaydet",
+  "Hold a photo and drag it to change the order.": "Sırayı değiştirmek için bir fotoğrafı basılı tutup sürükle.",
+  "Hue": "Ton",
 };

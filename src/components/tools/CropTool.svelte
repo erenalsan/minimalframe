@@ -3,6 +3,7 @@
   import Dial from "../../lib/Dial.svelte";
   import { t } from "../../lib/i18n.svelte.js";
   import { CROP_RATIOS } from "../../lib/geometry.js";
+  import Icon from "../Icon.svelte";
 
   let { crop, canReset, onratio, onturn, onchange, onreset } = $props();
 </script>
@@ -31,7 +32,7 @@
     <button class="btn ghost" onclick={() => onturn(-1)}>{t("Rotate left")}</button>
     <button class="btn ghost" onclick={() => onturn(1)}>{t("Rotate right")}</button>
     <button class="btn ghost" onclick={() => onchange({ flip: !crop.flip })}>{t("Flip")}</button>
-    <button class="btn ghost" onclick={onreset} disabled={!canReset}>{t("Reset crop")}</button>
+    <button class="btn ghost" onclick={onreset} disabled={!canReset}><Icon name="revert" />{t("Reset crop")}</button>
   </div>
   <p class="hint">{t("Drag the box or its corners. The crop shows on the photo when you switch to another tool.")}</p>
 </div>
@@ -42,20 +43,15 @@
     display: grid;
     grid-template-columns: repeat(4, 1fr);
   }
-  .turn .btn {
-    padding: 9px 4px;
-    font-size: 0.8rem;
-    line-height: 1.15;
+  .turn .btn :global(svg) {
+    width: 14px;
+    height: 14px;
+    flex: none;
   }
-  /* Compact tray (phones, portrait tablets): one swipeable row, so the photo keeps the screen. Same query as COMPACT in App.svelte. */
-  @media (max-width: 899px) and (min-height: 501px) {
-    .seg.wrap {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: none;
-    }
-    .seg.wrap button {
-      flex: none;
-    }
+  .turn .btn {
+    gap: 4px;
+    padding: 9px 4px;
+    font-size: var(--fs-label);
+    line-height: 1.15;
   }
 </style>

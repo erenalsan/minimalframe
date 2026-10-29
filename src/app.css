@@ -21,6 +21,14 @@
   --accent-ink: #18181a; /* selection marks: neutral ink, so the one amber stays the "do this" colour */
   --warn: #b45309; /* warnings: warm, readable on a light background */
   --radius: 14px;
+  /* Panels: one spacing scale and three text sizes */
+  --sp-1: 8px; /* a label and its control */
+  --sp-2: 12px; /* rows of one section */
+  --sp-3: 16px; /* panel edges; sections on phones */
+  --sp-4: 24px; /* sections */
+  --fs-section: 0.6875rem; /* 11px: section names, in small capitals */
+  --fs-label: 0.8125rem; /* 13px: labels, choices, tile names, notes */
+  --fs-value: 0.9375rem; /* 15px: numbers and typed text */
   --glass: var(--surface);
   --glass-strong: var(--surface);
   --glass-line: var(--line);
