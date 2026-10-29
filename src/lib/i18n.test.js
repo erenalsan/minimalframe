@@ -32,7 +32,7 @@ for (const p of [...BUILTIN_PRESETS, ...FILM_PRESETS]) keys.add(p.name);
 for (const s of EXPORT_SIZES) keys.add(s.label);
 for (const f of SYSTEM_FONTS) if (['system', 'serif', 'mono'].includes(f.id)) keys.add(f.label);
 for (const r of CROP_RATIOS) if (/[a-z]/i.test(r.label)) keys.add(r.label);
-for (const k of ['Good', 'High', 'Max', 'RGB', 'Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta', 'White', 'Cream', 'Black', 'One each', 'Pairs', 'Grid']) keys.add(k);
+for (const k of ['Good', 'High', 'Max', 'RGB', 'Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta', 'White', 'Cream', 'Black', 'One each', 'Pairs', 'Grid', 'Light mode', 'Dark mode']) keys.add(k);
 keys.delete('');
 
 if (process.env.I18N_DUMP) {

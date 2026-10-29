@@ -39,6 +39,8 @@
   import { computeFrameLayout, autoBorderAxis } from "./lib/frameLayout.js";
   import { filmLayout, drawFilm, drawContactSheet } from "./lib/film.js";
   import { postSlides, composeLayout } from "./lib/dump.js";
+  import { formatPlace, placeName } from "./lib/locationHelper.js";
+  import { encodeStyle, decodeStyle, findStyleCode } from "./lib/styleCode.js";
   import { reorder } from "./lib/reorder.js";
   import PostOptions from "./components/PostOptions.svelte";
   import {
@@ -91,6 +93,7 @@
   import Icon from "./components/Icon.svelte";
   import Landing from "./components/Landing.svelte";
   import LanguagePicker from "./components/LanguagePicker.svelte";
+  import ThemePicker from "./components/ThemePicker.svelte";
   import { logoLib, addLogo, useLogo, deleteLogo } from "./lib/logoLibrary.svelte.js";
   import PhotosTray from "./components/PhotosTray.svelte";
   import SaveDialog from "./components/SaveDialog.svelte";
@@ -646,6 +649,7 @@
     filmNeighbours: true, // 35 mm: the edges of your other photos at the strip's ends
     filmDate: false, // the orange date stamp of a compact camera
     exifDisplay: {
+      location: false, // off until chosen: showing it may look the place up online (see ensureLocation)
       date: false,
       note: true, // empty unless typed, so it only shows when you add one
       model: true,
@@ -657,6 +661,7 @@
     },
   });
 
+  const FRAME_DEFAULTS = $state.snapshot(frame); // what a style code leaves out (styleCode.js)
   const ratio = $derived(frameRatio(frame));
   const slices = $derived(ratio?.slices ?? 1);
 
@@ -870,6 +875,39 @@
     }
   }
 
+  // ─── Style codes (styleCode.js): this frame and look as text, to send to anyone ─────────────────
+  async function shareStyle() {
+    const code = await encodeStyle(frameSnapshot(), $state.snapshot(dev), FRAME_DEFAULTS, freshDev());
+    const text = `${t("My MinimalFrame style:")} ${code}`;
+    try {
+      if (isApp) await Share.share({ text, dialogTitle: t("Share to…") });
+      else if (navigator.share && matchMedia("(pointer: coarse)").matches) await navigator.share({ text });
+      else {
+        await navigator.clipboard.writeText(text);
+        libraryMessage = t("Style code copied. Send it to anyone: they paste it here.");
+      }
+    } catch (err) {
+      if (!/cancel|abort/i.test(`${err?.name} ${err?.message}`)) libraryMessage = code; // no clipboard: copy it by hand
+    }
+  }
+  async function applyStyleCode(text) {
+    const style = await decodeStyle(text, FRAME_DEFAULTS);
+    if (!style) {
+      libraryMessage = t("That isn't a MinimalFrame style code.");
+      return false;
+    }
+    applyPreset({ ...style.frame, dev: style.dev });
+    libraryMessage = t("Style applied.");
+    return true;
+  }
+  // A code shared into the app (WhatsApp → Share → MinimalFrame): apply it and show where it landed.
+  async function openStyleCode(text) {
+    if (!(await applyStyleCode(text))) return;
+    activeTab = "framing";
+    activeTool.framing = "templates";
+    if (compact) openTray();
+  }
+
   function deletePreset(id, e) {
     e?.stopPropagation();
     userPresets = userPresets.filter((p) => p.id !== id);
@@ -1030,7 +1068,7 @@
   async function openIncoming() {
     const Incoming = registerPlugin("Incoming");
     const open = async ({ files, text }) => {
-      if (text) showRecipe(text);
+      if (text) findStyleCode(text) ? openStyleCode(text) : showRecipe(text);
       if (!files?.length) return;
       try {
         const list = await Promise.all(
@@ -1340,6 +1378,9 @@
               "ISO",
               "DateTimeOriginal",
               "GPSLatitude",
+              "GPSLatitudeRef",
+              "GPSLongitude",
+              "GPSLongitudeRef",
             ],
           });
           if (rawExif?.Orientation) {
@@ -1348,6 +1389,9 @@
         } catch (exifErr) {
           console.warn("[MinimalFrame] EXIF parse warning:", exifErr);
         }
+        // Where it was taken, named by the photo itself (IPTC City / Country, written by Lightroom and
+        // agencies). A separate small read: exifr's pick list above covers only the camera blocks.
+        const iptc = await exifr.parse(arrayBuffer, { iptc: true, tiff: false, exif: false, gps: false }).catch(() => null);
 
         // 2. Pixel decoding: RAW vs Standard
         let rawBadge = "";
@@ -1460,6 +1504,8 @@
           rotated: detectedOrientation > 1, // shown in the UI; the browser or LibRaw may have done the rotating
           selected: true, // included in batch export
           hadGps: rawExif?.GPSLatitude != null || rawExif?.latitude != null, // exports never contain it
+          // the GPS position, for the location line (looked up only when the user shows it)
+          gps: Number.isFinite(rawExif?.latitude) && Number.isFinite(rawExif?.longitude) ? { lat: rawExif.latitude, lon: rawExif.longitude } : null,
           fujiRecipe: /fujifilm/i.test(rawExif?.Make ?? "") ? await recipeFromPhoto(arrayBuffer) : null, // the camera's saved recipe
           // the camera's own values, for exports that keep camera info (see exifWriter.js)
           camera: {
@@ -1485,7 +1531,9 @@
             iso: iso,
             date,
             note: "",
+            location: formatPlace(iptc ?? {}), // "" until looked up from the GPS position or typed
           },
+          placeFromPhoto: Boolean(formatPlace(iptc ?? {})), // the photo names its place: no lookup needed
         });
       } catch (err) {
         console.error(`[MinimalFrame] Failed to load ${file.name}: ${err?.name}: ${err?.message}`, err);
@@ -1673,6 +1721,27 @@
   }
   let histoTimer;
 
+  // ─── Location (locationHelper.js) ──────────────────────────────────────────
+  // A photo with a GPS position and no place name yet gets one when the location line is on: looked up
+  // online (OpenStreetMap), or its coordinates offline. Once per photo: a name the user types, or clears to
+  // type a new one, is never replaced.
+  let locating = $state(false);
+  const showsLocation = () => frame.showExif && frame.exifDisplay.location;
+  async function ensureLocation(item) {
+    if (!showsLocation() || !item?.gps || item.locationTried || item.exifOverride.location?.trim()) return;
+    item.locationTried = true;
+    const name = await placeName(item.gps.lat, item.gps.lon, i18n.lang);
+    if (!item.exifOverride.location?.trim()) item.exifOverride.location = name;
+  }
+  $effect(() => {
+    const item = activeItem;
+    if (!showsLocation() || !item?.gps || item.locationTried || item.exifOverride.location?.trim()) return;
+    untrack(() => {
+      locating = true;
+      ensureLocation(item).finally(() => (locating = false));
+    });
+  });
+
   // ─── Caption text ──────────────────────────────────────────────────────────
   function buildExifLines(override, display) {
     if (!override) return [];
@@ -1710,6 +1779,7 @@
     }
 
     const extra = [];
+    if (display.location && override.location?.trim()) extra.push(override.location.trim());
     if (display.note && override.note?.trim()) extra.push(override.note.trim());
     if (display.date && override.date?.trim()) extra.push(override.date.trim());
     if (extra.length) lines.push({ type: "extra", text: extra.join("  ·  "), parts: extra });
@@ -2254,6 +2324,7 @@
   /** Renders one photo for export: one file, or one per slide for carousel ratios. */
   // group: the photos sharing this slide of a photo dump; name: the file name to use (without extension).
   async function renderFiles(item, mode, index = 0, group = null, name = null) {
+    if (mode === "framed") for (const it of group ?? [item]) await ensureLocation(it);
     const canvas = group ? await generateSlideCanvas(group) : await generateFullResExportCanvas(item, mode);
     if (!canvas) throw new Error("could not render the photo");
     const base = name ?? `${cleanName(item.name, `photo_${index + 1}`)}_${mode === "edited" ? "edited" : "framed"}`;
@@ -2350,7 +2421,9 @@
     }
   }
 
+  let statusDone = $state(false); // the status says something finished (Saved, Shared): shown in green
   function flashStatus(text) {
+    statusDone = true;
     downloadStatus = text;
     setTimeout(() => downloadStatus === text && (downloadStatus = ""), 5000);
   }
@@ -2358,7 +2431,7 @@
   async function downloadImage(mode = "framed") {
     if (!processedImage || !activeItem) return;
     isDownloading = true;
-    downloadStatus = t("Exporting…");
+    statusDone = false, downloadStatus = t("Exporting…");
     try {
       await new Promise((r) => setTimeout(r, 20)); // let the status paint
       const files = await renderFiles(activeItem, mode);
@@ -2376,7 +2449,7 @@
     } catch (err) {
       console.error("[MinimalFrame] Download failed:", err);
       loadError = t("Export failed: {error}", { error: err.message });
-      downloadStatus = t("Export failed. See the message above the photo.");
+      statusDone = false, downloadStatus = t("Export failed. See the message above the photo.");
     } finally {
       isDownloading = false;
     }
@@ -2430,10 +2503,10 @@
   async function shareImage() {
     if (!activeItem) return;
     isDownloading = true;
-    downloadStatus = t("Preparing…");
+    statusDone = false, downloadStatus = t("Preparing…");
     try {
       await shareFiles(await renderFiles(activeItem, "framed"));
-      if (pendingShare) downloadStatus = t("Ready to share");
+      if (pendingShare) statusDone = false, downloadStatus = t("Ready to share");
     } catch (err) {
       console.error("[MinimalFrame] Share failed:", err);
       loadError = t("Share failed: {error}", { error: err.message });
@@ -2469,7 +2542,7 @@
       }
       if (share) {
         await shareFiles(files);
-        if (pendingShare) downloadStatus = t("Ready to share");
+        if (pendingShare) statusDone = false, downloadStatus = t("Ready to share");
         return;
       }
       batchProgress.filename = savesSeparately ? t("Saving…") : t("Packing the ZIP…");
@@ -2526,11 +2599,21 @@
   <header class="bar" class:tight={barTight} bind:this={barEl}>
     <div class="bar-side">
       <span class="wordmark"><img class="mark" src="/favicon.svg" alt="" /><span class="wm-text">MinimalFrame</span></span>
-      {#if activeItem}
-        <button class="photos-btn" class:on={compact && trayOpen && trayView === "photos"} onclick={togglePhotos} aria-label={t("Your photos ({n})", { n: filesList.length })} title={t("Your photos")}>
-          <img src={activeItem.thumbUrl} alt="" />
-          {#if filesList.length > 1}<span class="count">{filesList.length}</span>{/if}
-        </button>
+      {#if started}
+        <!-- Phones: the photos button grows in from the left when the first photo arrives, sliding the
+             Edit/Frame switch over to make room. Several photos show as a small fanned stack with their count. -->
+        <div class="photos-slot" class:shown={!!activeItem}>
+          {#if activeItem}
+            <button class="photos-btn" class:on={compact && trayOpen && trayView === "photos"} onclick={togglePhotos} aria-label={t("Your photos ({n})", { n: filesList.length })} title={t("Your photos")}>
+              {#each filesList.filter((f) => f !== activeItem).slice(0, 2).reverse() as f, i (f.id)}
+                <img class="card" style:--i={filesList.length > 2 ? 2 - i : 1} src={f.thumbUrl} alt="" />
+              {/each}
+              <img src={activeItem.thumbUrl} alt="" />
+              {#if filesList.length > 1}<span class="count">{filesList.length}</span>{/if}
+            </button>
+          {/if}
+        </div>
+        {#if !compact && filesList.length > 1}<span class="photo-count">{t("{n} photos", { n: filesList.length })}</span>{/if}
       {/if}
     </div>
     {#if started}
@@ -2539,7 +2622,7 @@
         <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>{t("Frame")}</button>
       </div>
       <div class="bar-side end">
-        {#if !compact}<LanguagePicker />{/if}
+        {#if !compact}<ThemePicker /><LanguagePicker />{/if}
         <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label={t("Add photos")} title={t("Add photos")}><Icon name="add" /></button>
         <button class="icon-btn" onclick={undo} disabled={!canUndo || !activeItem} aria-label={t("Undo")} title={t("Undo (Ctrl+Z)")}><Icon name="undo" /></button>
         <button class="icon-btn" onclick={redo} disabled={!canRedo || !activeItem} aria-label={t("Redo")} title={t("Redo (Ctrl+Shift+Z)")}><Icon name="redo" /></button>
@@ -2854,6 +2937,8 @@
               onsave={() => openSave("template")}
               onexport={exportLibrary}
               onimport={importLibrary}
+              onsharestyle={shareStyle}
+              onapplystyle={applyStyleCode}
             />
           {:else if tool === "ratio"}
             <RatioTool bind:frame={() => frame, keep} bind:item={() => activeItem, keep} {slices} {fillAxis} />
@@ -2868,6 +2953,7 @@
             <CaptionTool
               bind:frame={() => frame, keep}
               bind:item={() => activeItem, keep}
+              {locating}
             />
           {:else if tool === "position"}
             <PositionTool
@@ -2914,6 +3000,7 @@
     {sizeLabel}
     {slices}
     {savesSeparately}
+    {statusDone}
     postSlides={dumping ? slideList.length : 0}
   />
 
@@ -2978,7 +3065,7 @@
     background: rgb(0 0 0 / 0.35);
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
-    outline: 2px dashed #f59e0b;
+    outline: 2px dashed var(--accent);
     outline-offset: -14px;
     animation: drop-in 180ms ease-out;
   }
@@ -2993,7 +3080,7 @@
   }
   .drop-overlay em {
     font-style: normal;
-    color: #f59e0b;
+    color: var(--accent);
   }
   @keyframes drop-in {
     from {
@@ -3030,20 +3117,47 @@
     justify-content: flex-end;
   }
   /* Phones: the current photo as a button that opens the Photos tray (desktop has the strip instead). */
-  .photos-btn {
+  .photos-slot {
     display: none;
+  }
+  .photos-btn {
     position: relative;
     width: 38px;
     height: 38px;
     border-radius: 10px;
     border: 1.5px solid var(--line);
+    animation: photos-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes photos-in {
+    from {
+      opacity: 0;
+      scale: 0.6;
+    }
   }
   .photos-btn img {
+    position: relative;
     width: 100%;
     height: 100%;
     object-fit: cover;
     border-radius: 8px;
     display: block;
+  }
+  /* the other photos, fanned behind the current one: "there are more" at a glance */
+  .photos-btn .card {
+    position: absolute;
+    inset: 0;
+    border: 1.5px solid var(--surface);
+    translate: calc(var(--i) * 4px) calc(var(--i) * -3px);
+    rotate: calc(var(--i) * 6deg);
+    opacity: calc(1 - var(--i) * 0.2);
+  }
+  .photo-count {
+    margin-left: 14px;
+    padding-left: 14px;
+    border-left: 1px solid var(--line);
+    font-size: var(--fs-label);
+    color: var(--muted);
+    white-space: nowrap;
   }
   .photos-btn.on {
     border-color: var(--text);
@@ -3056,9 +3170,10 @@
     height: 18px;
     padding: 0 4px;
     border-radius: 9px;
-    background: var(--accent);
-    color: #1a1204;
-    font-size: 0.68rem;
+    background: var(--text); /* neutral: amber is for actions only */
+    color: var(--bg);
+    box-shadow: 0 0 0 2px var(--surface);
+    font-size: 0.7rem;
     font-weight: 750;
     line-height: 18px;
     text-align: center;
@@ -3179,17 +3294,7 @@
     aspect-ratio: var(--ar);
     border-radius: 3px;
     overflow: hidden;
-    box-shadow:
-      0 35px 120px -20px rgb(0 0 0 / 0.9),
-      0 10px 40px -15px rgb(0 0 0 / 0.7);
-  }
-  @media (prefers-color-scheme: light) {
-    /* the same lift, softened so it doesn't look like a smudge on the light background */
-    .print {
-      box-shadow:
-        0 35px 120px -20px rgb(0 0 0 / 0.45),
-        0 10px 40px -15px rgb(0 0 0 / 0.35);
-    }
+    box-shadow: var(--shadow-print);
   }
   /* Each picture keeps the size it has at its own aspect ratio (--pa), centred: equal to the box once it
      settles; mid-morph the box's edges move around it instead of the picture being rescaled. */
@@ -3679,8 +3784,19 @@
     .app:not(.empty) .bar {
       grid-template-columns: auto 1fr auto;
     }
-    .photos-btn {
-      display: block;
+    /* No photo yet: the switch sits at the left edge; the photos button's room opens as photos arrive. */
+    .photos-slot {
+      display: flex;
+      width: 0;
+      margin-right: -6px; /* cancels the bar's gap while empty */
+      transition: width 300ms cubic-bezier(0.2, 0.8, 0.2, 1), margin 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .photos-slot.shown {
+      width: 48px;
+      margin-right: 0;
+    }
+    .bar .modes {
+      justify-self: start;
     }
     .modes button {
       min-width: 0;

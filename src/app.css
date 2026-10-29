@@ -3,23 +3,30 @@
  *
  * Darkroom: neutral greys so the photo is the only colour on screen (a tinted surround skews how you
  * judge colour). One amber accent marks actions (Export, Share, Apply); selections are neutral ink, so the
- * "do this" colour stands out and nothing competes with the photo's own colours.
- * Light or dark follows the device setting.
+ * "do this" colour stands out and nothing competes with the photo's own colours. Green only says "done".
+ * Dark: a matte black room for focus. Light: a white gallery. The theme follows the device, or the user's
+ * choice (theme.svelte.js sets <html data-theme>). Contrast: body text ≥ 15:1, small text ≥ 4.5:1,
+ * buttons and icons ≥ 3:1 against what's behind them.
  */
 :root {
-  --bg: #f2f2f1;
-  --stage: #e6e6e4; /* behind the photo: neutral mid-light grey */
-  --surface: #fbfbfa; /* bar, tool rail, settings panel, dialogs */
-  --line: rgb(0 0 0 / 0.09);
-  --field: rgb(0 0 0 / 0.05); /* inputs, segmented controls, selected rows */
-  --text: #18181a;
-  --muted: rgb(24 24 26 / 0.6);
-  --accent: #f59e0b; /* actions only: Export, Share, Apply, Save, progress */
+  --bg: #f8fafc; /* gallery off-white */
+  --stage: #eceef1; /* behind the photo: a touch darker, so a white frame still shows its edge */
+  --surface: #ffffff; /* bar, tool rail, settings panel, dialogs */
+  --line: rgb(17 24 39 / 0.09);
+  --field: rgb(17 24 39 / 0.05); /* inputs, segmented controls, selected rows */
+  --text: #111827; /* deep charcoal, not black: easy on the eyes (17:1) */
+  --muted: rgb(17 24 39 / 0.62);
+  --accent: #d97706; /* deeper amber, so buttons stand out on white (3.2:1); dark ink text on it (5.8:1) */
   --on: #ffffff; /* the selected option in a switch: a raised chip on a grey track */
-  --on-shadow: 0 1px 3px rgb(0 0 0 / 0.16), 0 0 0 1px rgb(0 0 0 / 0.04);
-  --accent-strong: #fbbf24;
-  --accent-ink: #18181a; /* selection marks: neutral ink, so the one amber stays the "do this" colour */
+  --on-shadow: 0 1px 3px rgb(17 24 39 / 0.14), 0 0 0 1px rgb(17 24 39 / 0.04);
+  --accent-strong: #f59e0b;
+  --accent-ink: #111827; /* selection marks: neutral ink, so the one amber stays the "do this" colour */
   --warn: #b45309; /* warnings: warm, readable on a light background */
+  --success: #047857; /* rich green, dark enough for small text on white (5.5:1) */
+  /* floating panels and dialogs: soft layered shadows, like paper lifted off a table */
+  --shadow-float: 0 1px 2px rgb(17 24 39 / 0.04), 0 4px 12px rgb(17 24 39 / 0.08);
+  /* the photo lifted off the stage: soft on the light gallery wall */
+  --shadow-print: 0 2px 6px rgb(17 24 39 / 0.08), 0 18px 48px -16px rgb(17 24 39 / 0.22);
   --radius: 14px;
   /* Panels: one spacing scale and three text sizes */
   --sp-1: 8px; /* a label and its control */
@@ -32,22 +39,54 @@
   --glass: var(--surface);
   --glass-strong: var(--surface);
   --glass-line: var(--line);
-  color-scheme: light dark only; /* "only": browsers must not force-darken our light theme */
+  color-scheme: light only; /* "only": browsers must not force-darken our light theme */
 }
+/* Dark: the device's setting (unless the user picked Light), or the user's pick. The same values twice:
+   CSS can't share one block between a media query and an attribute. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111112;
-    --stage: #0c0c0d;
-    --surface: #161617;
-    --line: rgb(255 255 255 / 0.08);
-    --field: rgb(255 255 255 / 0.06);
-    --text: #f1f1ef;
-    --muted: rgb(241 241 239 / 0.56);
-    --accent-ink: #f1f1ef;
+  :root:not([data-theme="light"]) {
+    --bg: #121212; /* matte near-black: calmer than pure black, no glare around the photo */
+    --stage: #0a0a0a; /* the deepest tone, right behind the photo: nothing competes with it */
+    --surface: #1a1a1a;
+    --line: rgb(229 231 235 / 0.09);
+    --field: rgb(229 231 235 / 0.07);
+    --text: #e5e7eb; /* soft light grey, not white: crisp camera details without glare (15:1) */
+    --muted: rgb(229 231 235 / 0.6);
+    --accent: #f59e0b; /* warm amber: the one "do this" colour */
+    --accent-strong: #fbbf24;
+    --accent-ink: #e5e7eb;
     --warn: #fbbf24;
+    --success: #10b981; /* calm green: done, saved */
     --on: #3a3a3e;
     --on-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+    --shadow-float: 0 2px 6px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
+    --shadow-print: 0 35px 120px -20px rgb(0 0 0 / 0.9), 0 10px 40px -15px rgb(0 0 0 / 0.7);
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #121212; /* matte near-black: calmer than pure black, no glare around the photo */
+  --stage: #0a0a0a; /* the deepest tone, right behind the photo: nothing competes with it */
+  --surface: #1a1a1a;
+  --line: rgb(229 231 235 / 0.09);
+  --field: rgb(229 231 235 / 0.07);
+  --text: #e5e7eb; /* soft light grey, not white: crisp camera details without glare (15:1) */
+  --muted: rgb(229 231 235 / 0.6);
+  --accent: #f59e0b; /* warm amber: the one "do this" colour */
+  --accent-strong: #fbbf24;
+  --accent-ink: #e5e7eb;
+  --warn: #fbbf24;
+  --success: #10b981; /* calm green: done, saved */
+  --on: #3a3a3e;
+  --on-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  --shadow-float: 0 2px 6px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
+  --shadow-print: 0 35px 120px -20px rgb(0 0 0 / 0.9), 0 10px 40px -15px rgb(0 0 0 / 0.7);
+  color-scheme: dark;
+}
+/* Switching theme: everything cross-fades for a moment (theme.svelte.js) */
+html.theme-fade,
+html.theme-fade * {
+  transition: background-color 300ms, color 300ms, border-color 300ms, fill 300ms !important;
 }
 
 /* The photo's aspect ratio is registered as a number so it can be animated (App.svelte, frame morph). */

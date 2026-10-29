@@ -5,6 +5,7 @@
   import { t } from "../lib/i18n.svelte.js";
   import { reorder } from "../lib/reorder.js";
   import LanguagePicker from "./LanguagePicker.svelte";
+  import ThemePicker from "./ThemePicker.svelte";
   import PostOptions from "./PostOptions.svelte";
 
   let { filesList = $bindable(), post = $bindable(), activeIndex, coverOn, coverShown, autoTitle, onpick, onpickcover, onremove, onadd, onmove } = $props();
@@ -47,6 +48,8 @@
 <div class="lang">
   <span class="label">{t("Language")}</span>
   <LanguagePicker inline />
+  <span class="label">{t("Appearance")}</span>
+  <ThemePicker inline />
 </div>
 
 <style>

@@ -454,4 +454,25 @@ export default {
   "Save all {n} slides": "{n} slaytın hepsini kaydet",
   "Hold a photo and drag it to change the order.": "Sırayı değiştirmek için bir fotoğrafı basılı tutup sürükle.",
   "Hue": "Ton",
+  // ── Location
+  "Location": "Konum",
+  "Show location": "Konumu göster",
+  "Looking up the place…": "Yer aranıyor…",
+  "Type a place, e.g. Passau, Germany": "Bir yer yaz, ör. Passau, Almanya",
+  "From the photo's GPS. The place name is looked up on OpenStreetMap; type to change it.": "Fotoğrafın GPS bilgisinden. Yer adı OpenStreetMap'te aranır; değiştirmek için yaz.",
+  "This photo has no GPS position. Type the place yourself.": "Bu fotoğrafta GPS konumu yok. Yeri kendin yaz.",
+  "The place comes from the photo's own details. Type to change it.": "Yer, fotoğrafın kendi bilgilerinden geliyor. Değiştirmek için yaz.",
+  // ── Style codes
+  "My MinimalFrame style:": "MinimalFrame stilim:",
+  "Style code copied. Send it to anyone: they paste it here.": "Stil kodu kopyalandı. İstediğine gönder: buraya yapıştırsınlar.",
+  "That isn't a MinimalFrame style code.": "Bu bir MinimalFrame stil kodu değil.",
+  "Style applied.": "Stil uygulandı.",
+  "Share this style": "Bu stili paylaş",
+  "Paste a style code": "Stil kodu yapıştır",
+  "Apply": "Uygula",
+  "{n} photos": "{n} fotoğraf",
+  // ── Theme
+  "Appearance": "Görünüm",
+  "Light mode": "Açık",
+  "Dark mode": "Koyu",
 };

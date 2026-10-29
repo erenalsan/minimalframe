@@ -5,7 +5,8 @@
   import { EXIF_FIELDS, ALIGN_X } from "../../lib/catalog.js";
   import { allFonts, addFont, rememberFont, registerFile } from "../../lib/fontLibrary.svelte.js";
 
-  let { frame = $bindable(), item = $bindable() } = $props(); // item: the active photo (its caption text)
+  // item: the active photo (its caption text); locating: its place name is being looked up
+  let { frame = $bindable(), item = $bindable(), locating = false } = $props();
 
   function setAlignment(align) {
     frame.textAlign = align;
@@ -78,6 +79,31 @@
         {/each}
       </div>
       <p class="hint">{t("Missing details? Type them in. Changes apply to this photo only.")}</p>
+
+      <section class="place">
+        <p class="label">{t("Location")}</p>
+        <label class="switch">
+          <input type="checkbox" role="switch" bind:checked={frame.exifDisplay.location} />
+          <span class="switch-track" aria-hidden="true"></span>
+          {t("Show location")}
+        </label>
+        <input
+          class="text"
+          type="text"
+          bind:value={item.exifOverride.location}
+          placeholder={locating ? t("Looking up the place…") : t("Type a place, e.g. Passau, Germany")}
+          aria-label={t("Location")}
+          disabled={!frame.exifDisplay.location}
+        />
+        <!-- role="note": stays visible on phones, since it says where the position goes -->
+        <p class="hint" role="note">
+          {item.placeFromPhoto
+            ? t("The place comes from the photo's own details. Type to change it.")
+            : item.gps
+              ? t("From the photo's GPS. The place name is looked up on OpenStreetMap; type to change it.")
+              : t("This photo has no GPS position. Type the place yourself.")}
+        </p>
+      </section>
     {/if}
 
     <div>
@@ -223,6 +249,13 @@
   }
   .font[aria-pressed="true"] .font-name {
     color: var(--text);
+  }
+  .place {
+    display: grid;
+    gap: var(--sp-1);
+  }
+  .place .label {
+    margin: 0;
   }
   .font-more {
     display: grid;

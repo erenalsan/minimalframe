@@ -26,7 +26,8 @@ export function sanitizeTemplate(t, shape) {
   if (!t || typeof t !== "object") return out;
   for (const [k, v] of Object.entries(shape)) {
     if (k === "exifDisplay") continue;
-    if (typeof v === "number" ? isNum(t[k]) : typeof t[k] === typeof v) out[k] = t[k];
+    // a setting that is empty by default (filmStyle: null) takes a name or stays empty
+    if (v === null ? t[k] === null || typeof t[k] === "string" : typeof v === "number" ? isNum(t[k]) : typeof t[k] === typeof v) out[k] = t[k];
   }
   if (t.exifDisplay && typeof t.exifDisplay === "object") {
     out.exifDisplay = Object.fromEntries(

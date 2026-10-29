@@ -30,6 +30,7 @@
     slices,
     savesSeparately, // phones/tablets: separate images instead of a ZIP
     postSlides = 0, // a photo dump: Share and Save take all its slides, in order
+    statusDone = false, // the status says something finished: green
   } = $props();
   const QUALITY_NAMES = { good: "Good", high: "High", max: "Max" };
   const gpsCount = $derived(filesList.filter((f) => f.hadGps).length);
@@ -88,7 +89,7 @@
           </button>
         {/if}
       </div>
-      {#if downloadStatus}<p class="status" role="status">{downloadStatus}</p>{/if}
+      {#if downloadStatus}<p class="status" class:done={statusDone} role="status">{downloadStatus}</p>{/if}
       <!-- The settings most people never change, folded into one line (opens on tap) -->
       <details class="settings">
         <summary>

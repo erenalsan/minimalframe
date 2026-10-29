@@ -262,6 +262,13 @@ button:disabled {
 .status {
   font-size: 0.92rem;
 }
+.status.done {
+  color: var(--success);
+  font-weight: 600;
+}
+.status.done::before {
+  content: "\2713  "; /* ✓ */
+}
 
 /* ── Reset pill ──────────────────────────────────────────────────────── */
 /* "↺ Reset" next to the thing it resets (a slider's number, the curve). Hidden, but keeping its place,
@@ -393,6 +400,7 @@ button:disabled {
 
 /* ── Dialogs ─────────────────────────────────────────────────────────── */
 .sheet {
+  box-shadow: var(--shadow-float);
   margin: auto;
   width: min(500px, calc(100% - 32px));
   max-height: calc(100dvh - 32px);

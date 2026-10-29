@@ -7,7 +7,8 @@
   import { t } from "../../lib/i18n.svelte.js";
 
   // index: the active photo's place in the list (its frame number counts up from the first photo's).
-  let { frame = $bindable(), index = 0, userPresets, hasLooks, libraryMessage, onapply, ondelete, onsave, onexport, onimport } = $props();
+  let { frame = $bindable(), index = 0, userPresets, hasLooks, libraryMessage, onapply, ondelete, onsave, onexport, onimport, onsharestyle, onapplystyle } = $props();
+  let styleCode = $state("");
   const INKS = [["Orange", "#f2a23c"], ["White", "#d9d6cc"], ["Yellow", "#ffd35a"]];
   const CARDS = [["White", "#f7f6f1"], ["Cream", "#efe4cc"], ["Black", "#1b1b1d"]];
   const film = $derived(frame.filmStyle);
@@ -100,6 +101,14 @@
 <button class="btn ghost" onclick={onsave}>{t("Save current settings as a template")}</button>
 <details class="more">
   <summary>{t("More")}</summary>
+  <!-- Style codes: this frame and look as text to send to a friend; theirs pasted here -->
+  <div class="stack style-code">
+    <button class="btn ghost" onclick={onsharestyle}>{t("Share this style")}</button>
+    <form class="paste" onsubmit={async (e) => { e.preventDefault(); if (await onapplystyle(styleCode)) styleCode = ""; }}>
+      <input class="text" type="text" bind:value={styleCode} placeholder={t("Paste a style code")} aria-label={t("Paste a style code")} />
+      <button class="btn ghost" disabled={!styleCode.trim()}>{t("Apply")}</button>
+    </form>
+  </div>
   <div class="row-btns">
   <button class="btn ghost" onclick={onexport} disabled={!userPresets.length && !hasLooks}>{t("Back up my templates and looks")}</button>
   <label class="btn ghost">
@@ -111,6 +120,14 @@
 {#if libraryMessage}<p class="hint" role="status">{libraryMessage}</p>{/if}
 
 <style>
+  .style-code {
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
+  }
+  .paste {
+    display: flex;
+    gap: var(--sp-1);
+  }
   /* Templates */
   .templates {
     display: grid;

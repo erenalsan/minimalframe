@@ -455,4 +455,25 @@ export default {
   "Save all {n} slides": "Alle {n} Slides speichern",
   "Hold a photo and drag it to change the order.": "Halte ein Foto gedrückt und ziehe es, um die Reihenfolge zu ändern.",
   "Hue": "Farbton",
+  // ── Location
+  "Location": "Ort",
+  "Show location": "Ort anzeigen",
+  "Looking up the place…": "Ort wird gesucht…",
+  "Type a place, e.g. Passau, Germany": "Ort eingeben, z. B. Passau, Deutschland",
+  "From the photo's GPS. The place name is looked up on OpenStreetMap; type to change it.": "Aus den GPS-Daten des Fotos. Der Ortsname wird bei OpenStreetMap nachgeschlagen; zum Ändern einfach tippen.",
+  "This photo has no GPS position. Type the place yourself.": "Dieses Foto hat keine GPS-Position. Gib den Ort selbst ein.",
+  "The place comes from the photo's own details. Type to change it.": "Der Ort stammt aus den Angaben des Fotos selbst. Zum Ändern einfach tippen.",
+  // ── Style codes
+  "My MinimalFrame style:": "Mein MinimalFrame-Stil:",
+  "Style code copied. Send it to anyone: they paste it here.": "Stilcode kopiert. Schick ihn an wen du willst: hier einfügen.",
+  "That isn't a MinimalFrame style code.": "Das ist kein MinimalFrame-Stilcode.",
+  "Style applied.": "Stil übernommen.",
+  "Share this style": "Diesen Stil teilen",
+  "Paste a style code": "Stilcode einfügen",
+  "Apply": "Anwenden",
+  "{n} photos": "{n} Fotos",
+  // ── Theme
+  "Appearance": "Darstellung",
+  "Light mode": "Hell",
+  "Dark mode": "Dunkel",
 };

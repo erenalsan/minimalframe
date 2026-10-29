@@ -2,6 +2,7 @@ import { mount } from 'svelte'
 import './fonts.js'
 import './app.css'
 import './ui.css'
+import './lib/theme.svelte.js' // the chosen theme, before anything is drawn
 import App from './App.svelte'
 import { registerSW } from 'virtual:pwa-register'
 import { startSegMotion } from './lib/segMotion.js'

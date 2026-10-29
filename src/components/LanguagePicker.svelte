@@ -97,7 +97,7 @@
     border-radius: 14px;
     border: 1px solid var(--line);
     background: var(--surface);
-    box-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.35);
+    box-shadow: var(--shadow-float);
     animation: drop 140ms ease-out;
   }
   .menu button {
