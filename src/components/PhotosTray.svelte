@@ -8,7 +8,7 @@
   import ThemePicker from "./ThemePicker.svelte";
   import PostOptions from "./PostOptions.svelte";
 
-  let { filesList = $bindable(), post = $bindable(), activeIndex, coverOn, coverShown, autoTitle, onpick, onpickcover, onremove, onadd, onmove } = $props();
+  let { filesList = $bindable(), post = $bindable(), activeIndex, coverOn, coverShown, autoTitle, onpick, onpickcover, onremove, onadd, onmove, onsaved = null } = $props();
   const ticked = $derived(filesList.filter((f) => f.selected).length);
   // each ticked photo's place in the post
   const place = $derived(new Map(filesList.filter((f) => f.selected).map((f, i) => [f, i + 1])));
@@ -44,6 +44,7 @@
     "Swipe the photo left or right to switch between photos.",
   )}
 </p>
+{#if onsaved}<button class="btn ghost saved" onclick={onsaved}><Icon name="gallery" />{t("Saved photos")}</button>{/if}
 <!-- phones: the top bar is full, so the language lives here -->
 <div class="lang">
   <span class="label">{t("Language")}</span>
@@ -55,6 +56,18 @@
 <style>
   .photos + :global(.post) {
     margin-top: 16px;
+  }
+  .saved {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-1);
+    margin: 4px 0 var(--sp-2);
+  }
+  .saved :global(svg) {
+    width: 18px;
+    height: 18px;
   }
   .lang {
     display: grid;

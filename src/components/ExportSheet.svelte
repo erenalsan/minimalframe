@@ -31,12 +31,25 @@
     savesSeparately, // phones/tablets: separate images instead of a ZIP
     postSlides = 0, // a photo dump: Share and Save take all its slides, in order
     statusDone = false, // the status says something finished: green
+    onsaved = null, // the Android app: opens the saved photos after a save
   } = $props();
   const QUALITY_NAMES = { good: "Good", high: "High", max: "Max" };
   const gpsCount = $derived(filesList.filter((f) => f.hadGps).length);
   let help = $state(false);
+  let pressed = $state(""); // which button started the export, so only that one says "Exporting…"
   // PNG and WebP at 4K or full size: slow to encode and big, especially on phones
   const heavy = $derived(exportPrefs.format !== "jpeg" && ["4k", "full"].includes(exportPrefs.size));
+
+  // Scrolling on past the bottom opens the detailed settings: a new swipe up (or the wheel) once the sheet
+  // can't scroll any further, never the same swipe that just reached the bottom
+  let settingsEl = $state.raw(null);
+  const atBottom = () => dialog.scrollTop + dialog.clientHeight >= dialog.scrollHeight - 2;
+  let swipe = null;
+  function openSettings() {
+    if (!settingsEl || settingsEl.open || isBatchExporting) return;
+    settingsEl.open = true;
+    requestAnimationFrame(() => settingsEl.scrollIntoView({ block: "end", behavior: "smooth" }));
+  }
 </script>
 
 <dialog
@@ -48,6 +61,9 @@
   }}
   oncancel={(e) => isBatchExporting && e.preventDefault()}
   onclose={() => (exportOpen = false)}
+  ontouchstart={(e) => (swipe = e.touches.length === 1 && atBottom() ? e.touches[0].clientY : null)}
+  ontouchmove={(e) => swipe !== null && swipe - e.touches[0].clientY > 48 && ((swipe = null), openSettings())}
+  onwheel={(e) => e.deltaY > 0 && atBottom() && openSettings()}
 >
   <div class="sheet-in">
     <div class="sheet-head">
@@ -59,7 +75,7 @@
     {#if isBatchExporting}
       <div class="progress" role="status">
         <p>{t("Exporting {n} of {total}", { n: batchProgress.current, total: batchProgress.total })}</p>
-        <div class="progress-track"><div style:width="{batchProgress.percent}%"></div></div>
+        <div class="progress-track"><div style:transform="scaleX({batchProgress.percent / 100})"></div></div>
         <p class="hint">{batchProgress.filename}</p>
       </div>
     {:else}
@@ -67,19 +83,25 @@
         {#if saveQueue}
           <button class="btn accent big" onclick={saveNext}><Icon name="export" />{t("Save image {n} of {total}", { n: saveQueue.next + 1, total: saveQueue.files.length })}</button>
         {/if}
+        <!-- Save first, the main action; Share right under it (a share waiting for a tap takes the lead) -->
         <!-- svelte-ignore a11y_autofocus -->
+        <button
+          class={pendingShare || saveQueue ? "btn ghost" : "btn accent big"}
+          onclick={() => ((pressed = "save"), postSlides ? exportBatch("framed") : downloadImage("framed"))}
+          disabled={!processedImage || isDownloading}
+          autofocus={!pendingShare && !saveQueue}
+        >
+          <Icon name="export" />{isDownloading && pressed === "save" ? t("Exporting…") : postSlides ? t("Save all {n} slides", { n: postSlides * slices }) : slices > 1 ? t("Save {n} carousel slides", { n: slices }) : t("Save framed photo")}
+        </button>
         {#if canShareFiles}
           {#if pendingShare}
             <button class="btn accent big" onclick={() => shareFiles(pendingShare)}><Icon name="share" />{t("Share now")}</button>
           {:else}
-            <button class="btn accent big" onclick={() => (postSlides ? exportBatch("framed", true) : shareImage())} disabled={!processedImage || isDownloading} autofocus>
-              <Icon name="share" />{isDownloading ? t("Preparing…") : t("Share to…")}
+            <button class="btn ghost" onclick={() => ((pressed = "share"), postSlides ? exportBatch("framed", true) : shareImage())} disabled={!processedImage || isDownloading}>
+              <Icon name="share" />{isDownloading && pressed === "share" ? t("Preparing…") : t("Share to…")}
             </button>
           {/if}
         {/if}
-        <button class={canShareFiles ? "btn ghost" : "btn accent big"} onclick={() => (postSlides ? exportBatch("framed") : downloadImage("framed"))} disabled={!processedImage || isDownloading} autofocus={!canShareFiles}>
-          {isDownloading && !canShareFiles ? t("Exporting…") : postSlides ? t("Save all {n} slides", { n: postSlides * slices }) : slices > 1 ? t("Save {n} carousel slides", { n: slices }) : t("Save framed photo")}
-        </button>
         <button class="btn ghost" onclick={() => downloadImage("edited")} disabled={!processedImage || isDownloading}>{t("Save photo only, without frame")}</button>
         {#if filesList.length > 1 && !postSlides}
           <button class="btn ghost" onclick={() => exportBatch("framed")} disabled={selectedCount === 0 || isDownloading}>
@@ -90,8 +112,9 @@
         {/if}
       </div>
       {#if downloadStatus}<p class="status" class:done={statusDone} role="status">{downloadStatus}</p>{/if}
+      {#if onsaved && statusDone}<button class="btn ghost see-saved" onclick={() => (dialog.close(), onsaved())}><Icon name="gallery" />{t("See saved photos")}</button>{/if}
       <!-- The settings most people never change, folded into one line (opens on tap) -->
-      <details class="settings">
+      <details class="settings" bind:this={settingsEl}>
         <summary>
           <span>{t(EXPORT_SIZES.find((x) => x.id === exportPrefs.size)?.label ?? "")} · {exportPrefs.format === "jpeg" ? "JPEG" : exportPrefs.format === "png" ? "PNG" : "WebP"}{exportPrefs.format === "png" ? "" : ` · ${t(QUALITY_NAMES[exportPrefs.quality])}`}</span>
           {#if sizeEstimate}<span class="estimate">{slices > 1 ? t("{size} per carousel", { size: sizeEstimate }) : t("{size} per photo", { size: sizeEstimate })}</span>{/if}
@@ -235,6 +258,15 @@
     gap: 16px;
     padding-top: 10px;
   }
+  .settings[open] .settings-body {
+    animation: settings-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes settings-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
   .help-btn {
     margin-left: auto;
     width: 30px;
@@ -295,7 +327,8 @@
   .progress-track div {
     height: 100%;
     background: var(--accent);
-    transition: width 200ms;
+    transform-origin: left;
+    transition: transform 200ms;
   }
   .estimate {
     font-size: 0.85rem;
@@ -306,5 +339,15 @@
     .sizes {
       grid-template-columns: repeat(2, 1fr);
     }
+  }
+  .see-saved {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-1);
+  }
+  .see-saved :global(svg) {
+    width: 18px;
+    height: 18px;
   }
 </style>

@@ -18,6 +18,11 @@ const cameras = {
   'NIKON CORPORATION NIKON Z 6_2': 'Nikon Z6 II',
   'NIKON CORPORATION NIKON D850': 'Nikon D850',
   'Apple iPhone 15 Pro': 'iPhone 15 Pro',
+  'samsung SM-S931B': 'Galaxy S25',
+  'samsung SM-S928B/DS': 'Galaxy S24 Ultra',
+  'samsung SM-X616B': 'Galaxy Tab S9 FE+',
+  'samsung Galaxy S25': 'Galaxy S25', // newer phones write the name themselves
+  'samsung SM-Z999': 'SM-Z999', // unknown code: left alone
   'Leica Camera AG LEICA Q2': 'Leica Q2',
   'Acme Cam 3000': 'Acme Cam 3000', // unknown: left alone
   '': '',

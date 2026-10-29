@@ -8,7 +8,7 @@
   import { t } from "../lib/i18n.svelte.js";
   import LanguagePicker from "./LanguagePicker.svelte";
   // langInWell: phones, where the top bar has no room for the language button.
-  let { bare = false, langInWell = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick } = $props();
+  let { bare = false, langInWell = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick, onsaved } = $props();
 
   const touch = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches; // no dragging files on phones
   const isApp = typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
@@ -35,6 +35,7 @@
       {#if isLoading}<span class="spinner" aria-hidden="true"></span>{loadingStatus || t("Opening…")}{:else}{t("Open photos")}{/if}
     </button>
     {#if !bare}<button class="link" onclick={onsample} disabled={isLoading}>{t("or try the sample")}</button>{/if}
+    {#if onsaved}<button class="link saved-link" onclick={onsaved}><Icon name="gallery" />{t("Your saved photos")}</button>{/if}
     <p class="mono">JPEG · PNG · HEIC · RAW</p>
     {#if bare && langInWell}<LanguagePicker inline />{/if}
   </div>
@@ -207,6 +208,15 @@
     font-weight: 650;
     font-size: 1rem;
     cursor: pointer;
+  }
+  .saved-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .saved-link :global(svg) {
+    width: 18px;
+    height: 18px;
   }
   .link {
     min-height: 40px;

@@ -42,6 +42,7 @@
   import { formatPlace, placeName } from "./lib/locationHelper.js";
   import { encodeStyle, decodeStyle, findStyleCode } from "./lib/styleCode.js";
   import { reorder } from "./lib/reorder.js";
+  import { fitWidth } from "./lib/fitWidth.js";
   import PostOptions from "./components/PostOptions.svelte";
   import {
     CROP_DEFAULT,
@@ -93,6 +94,7 @@
   import Icon from "./components/Icon.svelte";
   import Landing from "./components/Landing.svelte";
   import LanguagePicker from "./components/LanguagePicker.svelte";
+  import SavedPhotos from "./components/SavedPhotos.svelte";
   import ThemePicker from "./components/ThemePicker.svelte";
   import { logoLib, addLogo, useLogo, deleteLogo } from "./lib/logoLibrary.svelte.js";
   import PhotosTray from "./components/PhotosTray.svelte";
@@ -244,7 +246,9 @@
   function closeOnBack(close) {
     const entry = { close };
     backStack.push(entry);
-    popped.then(() => backStack.includes(entry) && history.pushState({ mfOverlay: true }, ""));
+    // after this update's other effects: one opening as another closes (tray → Saved photos) must not push
+    // before that one's history.back() is under way, or the back would take this entry instead
+    queueMicrotask(() => popped.then(() => backStack.includes(entry) && history.pushState({ mfOverlay: true }, "")));
     return () => {
       const i = backStack.indexOf(entry);
       if (i < 0) return; // back already closed it
@@ -307,7 +311,19 @@
   let isLoading = $state(false);
   let loadingStatus = $state("");
   let loadError = $state("");
+  // What went wrong, in words people understand, instead of the browser's own message.
+  function why(err) {
+    const msg = `${err?.name ?? ""} ${err?.message ?? err ?? ""}`;
+    if (/decod|EncodingError/i.test(msg)) return t("The photo couldn't be read. Open it again and try once more.");
+    if (/memory|allocat|too large|exceed|RangeError/i.test(msg)) return t("This photo is too big for this device at this size. Choose a smaller size under Export.");
+    if (/network|fetch|offline/i.test(msg)) return t("No internet connection. Try again when you're online.");
+    return err?.message || String(err);
+  }
   let isDragging = $state(false);
+  // The size photos are worked on while editing: as sharp as this screen shows them (a phone shows a photo
+  // ~1500 px tall), at least 1080. Capped at 1600 because every open photo keeps one: 20 photos at full
+  // phone resolution would run a phone out of memory. Export always uses the full-size original.
+  const PREVIEW = Math.round(Math.min(1600, Math.max(1080, Math.max(innerWidth, innerHeight * 0.75) * (devicePixelRatio || 1))));
 
   const selectedCount = $derived(filesList.filter((f) => f.selected).length);
 
@@ -1173,17 +1189,24 @@
     if (!exportOpen || !processedImage || !activeItem) return;
     const s = EXPORT_SIZES.find((x) => x.id === exportPrefs.size);
     const { w, h } = targetDims(s, "framed");
-    const sample = drawFramed(document.createElement("canvas"), processedImage, activeItem);
+    const [img, item] = [processedImage, activeItem];
+    exportPrefs.format, exportPrefs.quality; // the estimate follows these too (read in the timer, so named here)
     let cancelled = false;
-    encodeCanvas(sample).then(({ blob }) => {
+    // drawing the sample is a whole frame's work: after the sheet's opening motion, not during it
+    const timer = setTimeout(async () => {
+      const sample = drawFramed(document.createElement("canvas"), img, item);
+      const { blob } = await encodeCanvas(sample);
       if (cancelled) return;
       const bytes = (blob.size / (sample.width * sample.height)) * w * h;
       sizeEstimate =
         bytes > 1e6
           ? t("about {size}", { size: `${(bytes / 1e6).toFixed(1)} MB` })
           : t("about {size}", { size: `${Math.max(1, Math.round(bytes / 1e3))} KB` });
-    });
-    return () => (cancelled = true);
+    }, 320);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   });
 
   /** Encodes a canvas with the chosen format; the extension follows what the browser actually produced. */
@@ -1233,29 +1256,30 @@
 
   // ─── Loading photos ────────────────────────────────────────────────────────
   // Narrow phones: when the top bar's buttons don't fit (long words like "Exportieren"), the Export button
-  // keeps its icon and drops its label. Checked whenever the bar's width, language or contents change.
+  // keeps its icon and drops its label. Worked out from sizes, never by showing the label to try (that
+  // flashed), and again whenever the bar, its left side (the photo slot slides open) or the label changes.
   let barEl = $state.raw(null);
   let barTight = $state(false);
   $effect(() => {
     if (!barEl) return;
-    i18n.lang, started, activeItem;
-    let frame;
-    const overlaps = (a, b) => a && b && a.getBoundingClientRect().right > b.getBoundingClientRect().left - 4;
-    const shown = (el, last) => [...(el?.children ?? [])][last ? "findLast" : "find"]((c) => c.getClientRects().length); // skip hidden buttons
+    i18n.lang, started, activeItem, compact;
+    const px = (el, prop) => parseFloat(getComputedStyle(el).getPropertyValue(prop)) || 0;
+    const visible = (el) => [...(el?.children ?? [])].filter((c) => c.getClientRects().length);
     const check = () => {
-      barTight = false; // measure with the label shown
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const left = barEl.querySelector(".bar-side"), modes = barEl.querySelector(".modes"), end = barEl.querySelector(".bar-side.end");
-        barTight = overlaps(shown(left, true), modes) || overlaps(modes, shown(end));
-      });
+      const left = barEl.querySelector(".bar-side"), modes = barEl.querySelector(".modes"), end = barEl.querySelector(".bar-side.end");
+      const btn = end?.querySelector(".bar-export"), label = btn?.querySelector(".bar-export-label");
+      if (!modes || !label) return (barTight = false);
+      const kids = visible(end);
+      const now = kids.reduce((w, c) => w + c.offsetWidth + px(c, "margin-left") + px(c, "margin-right"), 0) + px(end, "column-gap") * (kids.length - 1);
+      const labelRoom = label.offsetWidth + px(btn, "column-gap") + 2 * (px(btn, "--pad-x") - px(btn, "padding-left"));
+      const need = now + (barTight ? labelRoom : 0); // the right side with the label showing
+      const room = end.getBoundingClientRect().right - modes.getBoundingClientRect().right - px(barEl, "column-gap");
+      const leftEdge = visible(left).at(-1)?.getBoundingClientRect().right ?? 0;
+      barTight = need > room - 4 || leftEdge > modes.getBoundingClientRect().left - 4;
     };
     const ro = new ResizeObserver(check);
-    ro.observe(barEl);
-    return () => {
-      ro.disconnect();
-      cancelAnimationFrame(frame);
-    };
+    for (const el of [barEl, barEl.querySelector(".bar-side"), barEl.querySelector(".bar-export-label")]) if (el) ro.observe(el);
+    return () => ro.disconnect();
   });
 
   // ─── Last session ──────────────────────────────────────────────────────────
@@ -1284,6 +1308,8 @@
       const files = await Promise.all(photos.map((p) => idbGet(fileKey(p.key))));
       const keep = new Set(photos.map((p) => fileKey(p.key)));
       for (const k of await idbKeys()) if (String(k).startsWith("session-file:") && !keep.has(k)) idbDel(k); // left by a session that never got saved
+      // photos already saved or shared, unchanged since, are finished: they stay closed
+      for (const [i, p] of photos.entries()) if (p.done && files[i]) idbDel(fileKey(p.key)), (files[i] = null);
       const found = photos.filter((_, i) => files[i]);
       if (!found.length) return;
       started = true;
@@ -1315,15 +1341,26 @@
       return false;
     }
   };
+  // A photo saved or shared and not changed since is done: reopening the app leaves it out and asks for a
+  // new photo. Each photo keeps a fingerprint of its edits and the frame at its last export; any change
+  // after that (more edits, another frame) makes it unfinished work again, and it comes back as usual.
+  const photoSig = (f, frameJson) => JSON.stringify([f.dev, f.crop, f.fill, f.exifOverride]) + frameJson;
+  let exporting = []; // the photos the export under way is made from (marked done when it succeeds)
+  function markExported() {
+    const frameJson = JSON.stringify(frameSnapshot());
+    for (const f of exporting) f.exportedSig = photoSig(f, frameJson);
+  }
   function saveSessionNow() {
     clearTimeout(sessionTimer);
     if (pendingSession) idbSet(SESSION_KEY, pendingSession);
     pendingSession = null;
   }
   $effect(() => {
+    const frameJson = JSON.stringify(frameSnapshot());
     const snap = {
       v: 1,
       photos: filesList.map((f) => ({
+        done: f.exportedSig === photoSig(f, frameJson),
         key: f.id,
         name: f.name,
         dev: $state.snapshot(f.dev),
@@ -1396,7 +1433,9 @@
         // 2. Pixel decoding: RAW vs Standard
         let rawBadge = "";
         const isRaw = isRawFile(file.name);
-        let sourceBlob = file;
+        // Our own copy of the bytes already read above: a photo picked from an Android gallery is only lent to
+        // the app, and by export time it may no longer be readable ("The source image could not be decoded").
+        let sourceBlob = new Blob([arrayBuffer], { type: file.type });
         // Browsers auto-rotate standard JPEG/HEIC; RAW embedded previews carry no orientation, so rotate those manually.
         let orientationTag = 1;
 
@@ -1415,7 +1454,7 @@
           // Fast half-size decode (no demosaic) for the on-screen proxy; export re-decodes at full size.
           // LibRaw applies the camera's rotation itself.
           const half = await decodeRawLinear(file, { half: true });
-          previewImage = downscaleLinear(half, 1080);
+          previewImage = downscaleLinear(half, PREVIEW);
           fullW = half.width * 2;
           fullH = half.height * 2;
           small = downscaleLinear(previewImage, 160);
@@ -1438,10 +1477,10 @@
             sourceBlob = await heifSource(file); // a JPEG unless the browser reads HEIF itself
           }
 
-          // Decode once, keep only a ≤1080px proxy. The full-res source is re-decoded from sourceBlob at export.
-          const { bitmap, w, h } = await decodeProxy(sourceBlob, 1080);
+          // Decode once, keep only a screen-sized proxy. The full-res source is re-decoded from sourceBlob at export.
+          const { bitmap, w, h } = await decodeProxy(sourceBlob, PREVIEW);
           previewImage = applyExifOrientation(
-            createProxyPreview(bitmap, 1080),
+            createProxyPreview(bitmap, PREVIEW),
             orientationTag,
           );
           const isRotated90 = orientationTag >= 5;
@@ -1494,7 +1533,7 @@
           sourceBlob, // Encoded original (or decoded RAW JPEG); decoded only at export
           fullW,
           fullH,
-          previewImage, // ≤1080px proxy: a canvas, or 16-bit linear data for RAW
+          previewImage, // screen-sized proxy (PREVIEW): a canvas, or 16-bit linear data for RAW
           linearRaw, // export re-decodes the RAW file at full size
           thumbUrl,
           isRaw,
@@ -1537,7 +1576,7 @@
         });
       } catch (err) {
         console.error(`[MinimalFrame] Failed to load ${file.name}: ${err?.name}: ${err?.message}`, err);
-        loadError = t("Could not load {name}: {error}", { name: file.name, error: err.message });
+        loadError = t("Could not load {name}: {error}", { name: file.name, error: why(err) });
       }
     }
 
@@ -2071,8 +2110,8 @@
   };
   // Another photo of the slide (or the cover), developed from its preview with its own edits and crop.
   const devCache = new Map(); // `${id}|${max}` → { key, canvas }
-  function developedPreview(item, max = 1080, keep = true) {
-    if (item === activeItem && max >= 1080 && processedImage) return processedImage;
+  function developedPreview(item, max = PREVIEW, keep = true) {
+    if (item === activeItem && max >= PREVIEW && processedImage) return processedImage;
     const id = `${item.id}|${max}`;
     const key = JSON.stringify([item.dev, item.crop]);
     const hit = devCache.get(id);
@@ -2374,6 +2413,10 @@
   // The Android app saves each one straight into the gallery's "MinimalFrame" album (GalleryPlugin.java).
   const isApp = Capacitor.isNativePlatform();
   const Gallery = registerPlugin("Gallery");
+  let savedOpen = $state(false); // the saved-photos screen (app only)
+  // shortcut: Android 7–9 keep exports outside the album, so the screen is offered on Android 10+ only
+  let savedSupported = $state(false);
+  if (isApp) Gallery.list().then((r) => (savedSupported = r.supported), () => {});
   const savesSeparately = isApp || matchMedia("(pointer: coarse)").matches;
   const base64 = (blob) =>
     new Promise((ok, fail) => {
@@ -2423,6 +2466,7 @@
 
   let statusDone = $state(false); // the status says something finished (Saved, Shared): shown in green
   function flashStatus(text) {
+    markExported(); // only finished saves and shares say so
     statusDone = true;
     downloadStatus = text;
     setTimeout(() => downloadStatus === text && (downloadStatus = ""), 5000);
@@ -2430,6 +2474,7 @@
 
   async function downloadImage(mode = "framed") {
     if (!processedImage || !activeItem) return;
+    exporting = [activeItem];
     isDownloading = true;
     statusDone = false, downloadStatus = t("Exporting…");
     try {
@@ -2448,7 +2493,7 @@
       );
     } catch (err) {
       console.error("[MinimalFrame] Download failed:", err);
-      loadError = t("Export failed: {error}", { error: err.message });
+      loadError = t("Export failed: {error}", { error: why(err) });
       statusDone = false, downloadStatus = t("Export failed. See the message above the photo.");
     } finally {
       isDownloading = false;
@@ -2477,6 +2522,7 @@
     }
     try {
       await Share.share({ files: uris, dialogTitle: t("Share to…") });
+      flashStatus(t("Shared"));
     } catch (err) {
       if (!/cancel/i.test(err?.message ?? "")) throw err; // closed the share menu
     }
@@ -2502,6 +2548,7 @@
 
   async function shareImage() {
     if (!activeItem) return;
+    exporting = [activeItem];
     isDownloading = true;
     statusDone = false, downloadStatus = t("Preparing…");
     try {
@@ -2509,7 +2556,7 @@
       if (pendingShare) statusDone = false, downloadStatus = t("Ready to share");
     } catch (err) {
       console.error("[MinimalFrame] Share failed:", err);
-      loadError = t("Share failed: {error}", { error: err.message });
+      loadError = t("Share failed: {error}", { error: why(err) });
       downloadStatus = "";
     } finally {
       isDownloading = false;
@@ -2522,6 +2569,7 @@
     const asPost = dumping && mode === "framed";
     const batch = asPost ? slideList : filesList.filter((item) => item.selected).map((item) => ({ cover: false, items: [item] }));
     if (batch.length === 0) return;
+    exporting = batch.flatMap((b) => (b.cover ? [] : b.items));
     isBatchExporting = true;
     const total = batch.length;
     const stamp = new Date().toISOString().slice(0, 10);
@@ -2558,7 +2606,7 @@
         );
     } catch (err) {
       console.error("[MinimalFrame] Batch export error:", err);
-      loadError = t("Batch export failed: {error}", { error: err.message });
+      loadError = t("Batch export failed: {error}", { error: why(err) });
     } finally {
       isBatchExporting = false;
     }
@@ -2618,8 +2666,8 @@
     </div>
     {#if started}
       <div class="seg modes" role="group" aria-label={t("Mode")}>
-        <button aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>{t("Edit")}</button>
-        <button aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>{t("Frame")}</button>
+        <button use:fitWidth aria-pressed={activeTab === "editor"} onclick={() => setMode("editor")}>{t("Edit")}</button>
+        <button use:fitWidth aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>{t("Frame")}</button>
       </div>
       <div class="bar-side end">
         {#if !compact}<ThemePicker /><LanguagePicker />{/if}
@@ -2768,6 +2816,7 @@
         onchoose={() => { startPreset = null; fileInput?.click(); }}
         onsample={() => { startPreset = null; loadSamplePhoto(); }}
         onpick={(p) => { startPreset = p; fileInput?.click(); }}
+        onsaved={savedSupported ? () => (savedOpen = true) : null}
       />
     {/if}
 
@@ -2777,10 +2826,15 @@
       </p>
     {/if}
     {#if loadError}
-      <p class="alert glass" role="alert">
-        {loadError}
-        <button onclick={() => (loadError = "")} aria-label={t("Dismiss")}>×</button>
-      </p>
+      {@const [head, ...rest] = loadError.split(/:\s(.*)/s)}
+      <div class="alert" role="alert">
+        <span class="alert-icon" aria-hidden="true"><Icon name="alert" /></span>
+        <p>
+          <strong>{rest.length ? head : loadError}</strong>
+          {#if rest[0]}<span>{rest[0]}</span>{/if}
+        </p>
+        <button onclick={() => (loadError = "")} aria-label={t("Dismiss")}><Icon name="close" /></button>
+      </div>
     {/if}
   </section>
 
@@ -2878,6 +2932,7 @@
             onremove={removeImage}
             onadd={() => fileInput?.click()}
             onmove={reorderPhoto}
+            onsaved={savedSupported ? () => (closeTray(), (savedOpen = true)) : null}
           />
         {:else if activeTab === "editor" && !activeItem}
           <p class="tool-hint">{t("Add a photo to edit it.")}</p>
@@ -2976,6 +3031,7 @@
 
   <!-- ─── Export sheet ──────────────────────────────────────────────────── -->
   <ExportSheet
+    onsaved={savedSupported ? () => (savedOpen = true) : null}
     bind:dialog={exportDialog}
     bind:exportOpen
     bind:exportPrefs
@@ -3020,6 +3076,8 @@
     </div>
   {/if}
 </main>
+
+{#if savedSupported}<SavedPhotos bind:open={savedOpen} {Gallery} {closeOnBack} />{/if}
 
 <style>
   /* ── Shell ───────────────────────────────────────────────────────────────
@@ -3196,11 +3254,14 @@
   .bar .modes {
     justify-self: center;
   }
+  /* One fixed size in every language; long words are drawn narrower to fit (fitWidth.js) */
   .modes button {
-    min-width: 76px;
-    padding: 7px 16px;
+    width: 88px;
+    padding: 7px 10px;
     font-size: 0.9rem;
     font-weight: 650;
+    white-space: nowrap;
+    overflow: hidden;
   }
   /* The main switch: the chosen mode is solid ink, so it reads at a glance on any screen. */
   .modes button[aria-pressed="true"] {
@@ -3209,12 +3270,23 @@
     box-shadow: none;
   }
   .bar-export {
+    --pad-x: 16px; /* read by the barTight check */
     margin-left: 8px;
-    padding: 9px 16px;
+    padding: 9px var(--pad-x);
     white-space: nowrap; /* a long label ("Dışa aktar") goes icon-only instead of wrapping (see barTight) */
   }
+  /* the right side never squeezes its buttons; when they don't fit, Export drops its label instead */
+  .bar-side.end > :global(*) {
+    flex-shrink: 0;
+  }
+  /* hidden but still measured, so the check knows when it would fit again */
+  .bar.tight .bar-export {
+    position: relative;
+  }
   .bar.tight .bar-export-label {
-    display: none;
+    position: absolute;
+    right: 0; /* inside the button, so it never widens the page */
+    visibility: hidden;
   }
   .bar.tight .bar-export {
     padding-inline: 11px;
@@ -3379,14 +3451,70 @@
   .toast {
     bottom: 12px;
   }
+  /* A message card: icon, what happened, what to do, close. Warm (warn) rather than alarming red. */
   .alert {
     top: 12px;
-    border-color: var(--accent-ink);
+    z-index: 6;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+    gap: 12px;
+    width: min(440px, calc(100% - 32px));
+    padding: 12px 8px 12px 14px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+    box-shadow: var(--shadow-float);
+    animation: alert-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes alert-in {
+    from {
+      opacity: 0;
+      translate: -50% -12px;
+    }
+  }
+  .alert-icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    color: var(--warn);
+  }
+  .alert-icon :global(svg) {
+    width: 18px;
+    height: 18px;
+  }
+  .alert p {
+    display: grid;
+    gap: 2px;
+    padding-top: 1px;
+    font-size: var(--fs-label);
+    line-height: 1.4;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+  .alert strong {
+    font-size: 0.9rem;
+    font-weight: 650;
+    color: var(--text);
   }
   .alert button {
-    font-size: 1.2rem;
-    line-height: 1;
-    padding: 0 4px;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: var(--muted);
+  }
+  .alert button:hover {
+    background: var(--field);
+    color: var(--text);
+  }
+  .alert button :global(svg) {
+    width: 16px;
+    height: 16px;
   }
 
   /* ── Strip ─────────────────────────────────────────────────────────────── */
@@ -3799,8 +3927,8 @@
       justify-self: start;
     }
     .modes button {
-      min-width: 0;
-      padding: 6px 14px;
+      width: 70px;
+      padding: 6px 8px;
       font-size: 0.88rem;
     }
     .icon-btn {
@@ -3808,8 +3936,9 @@
       height: 38px;
     }
     .bar-export {
+      --pad-x: 14px;
       margin-left: 4px;
-      padding: 8px 14px;
+      padding: 8px var(--pad-x);
       font-size: 0.9rem;
     }
     .frame-pick,

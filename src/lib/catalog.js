@@ -79,6 +79,12 @@ export const ICONS = {
   "theme-light": "M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
   "theme-dark": "M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z",
   check: "M5 12.5l4.5 4.5L19 7.5",
+  alert: "M12 8.5v4.5M12 16.5v.01M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z",
+  close: "M6 6l12 12M18 6L6 18",
+  gallery: "M4 5h16v14H4zM4 15l4.5-4.5 4 4 2.5-2.5L20 17M15.5 9.5v.01",
+  "chev-left": "M14.5 6l-6 6 6 6",
+  "chev-right": "M9.5 6l6 6-6 6",
+  trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
 };
 
 export const EXIF_FIELDS = [

@@ -67,6 +67,23 @@ function splitBrand(name) {
   return [brand, model];
 }
 
+// Samsung writes a code (SM-S931B: S931 is the model, the last letter the region). Phones and tablets
+// people photograph with, newest first. shortcut: popular models only; add new ones as they come out.
+const GALAXY = {
+  S931: "Galaxy S25", S936: "Galaxy S25+", S938: "Galaxy S25 Ultra", S937: "Galaxy S25 Edge", S731: "Galaxy S25 FE",
+  S921: "Galaxy S24", S926: "Galaxy S24+", S928: "Galaxy S24 Ultra", S721: "Galaxy S24 FE",
+  S911: "Galaxy S23", S916: "Galaxy S23+", S918: "Galaxy S23 Ultra", S711: "Galaxy S23 FE",
+  S901: "Galaxy S22", S906: "Galaxy S22+", S908: "Galaxy S22 Ultra",
+  G991: "Galaxy S21", G996: "Galaxy S21+", G998: "Galaxy S21 Ultra", G990: "Galaxy S21 FE",
+  F966: "Galaxy Z Fold7", F956: "Galaxy Z Fold6", F946: "Galaxy Z Fold5", F936: "Galaxy Z Fold4",
+  F766: "Galaxy Z Flip7", F741: "Galaxy Z Flip6", F731: "Galaxy Z Flip5", F721: "Galaxy Z Flip4",
+  A566: "Galaxy A56", A366: "Galaxy A36", A266: "Galaxy A26", A556: "Galaxy A55", A356: "Galaxy A35",
+  A546: "Galaxy A54", A346: "Galaxy A34", A256: "Galaxy A25", A156: "Galaxy A15",
+  X610: "Galaxy Tab S9 FE+", X616: "Galaxy Tab S9 FE+", X510: "Galaxy Tab S9 FE", X516: "Galaxy Tab S9 FE",
+  X710: "Galaxy Tab S9", X810: "Galaxy Tab S9+", X910: "Galaxy Tab S9 Ultra",
+  X820: "Galaxy Tab S10+", X920: "Galaxy Tab S10 Ultra",
+};
+
 /** "ILCE-7RM4" → "Sony A7R IV", "Canon EOS 5D Mark IV" → "Canon 5D Mark IV", "NIKON Z 6_2" → "Nikon Z6 II". */
 export function cleanCamera(name) {
   if (!name?.trim()) return "";
@@ -85,6 +102,8 @@ export function cleanCamera(name) {
     model = raw.replace(/^Z (?=\w)/i, "Z").replace(/_(\d)$/, (_, n) => " " + roman(n)); // Z 6_2 → Z6 II
   } else if (brand === "Panasonic") {
     model = raw.replace(/^DC-/i, "").replace(/M(\d)$/, (_, n) => " " + roman(n));
+  } else if (brand === "Samsung" && (m = /^SM-([A-Z]\d{3})/i.exec(raw)) && GALAXY[m[1].toUpperCase()]) {
+    return GALAXY[m[1].toUpperCase()]; // SM-S931B → Galaxy S25
   } else if (brand === "Apple" || brand === "Google" || brand === "Samsung") {
     return raw || brand; // "iPhone 15 Pro", "Pixel 8" are already the name people use
   }

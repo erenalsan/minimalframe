@@ -27,7 +27,12 @@ export function setTheme(choice) {
   try {
     localStorage.setItem(KEY, choice);
   } catch {}
-  // a short cross-fade instead of a flash (app.css, html.theme-fade)
+  // a short cross-fade instead of a flash: one snapshot of the screen fading on the GPU (cheap even on slow
+  // phones); browsers without view transitions fade every element instead (app.css, html.theme-fade)
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.startViewTransition(apply);
+    return;
+  }
   const root = document.documentElement;
   root.classList.add("theme-fade");
   apply();
