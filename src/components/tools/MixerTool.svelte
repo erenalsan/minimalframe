@@ -56,7 +56,7 @@
     display: none;
   }
   /* Compact layout (phones): one slider at a time, like Light. Same query as COMPACT in App.svelte. */
-  @media (max-width: 899px) and (min-height: 501px) {
+  @media (max-width: 599px), (max-width: 899px) and (min-height: 501px) {
     .picker {
       display: flex;
     }

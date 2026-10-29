@@ -89,7 +89,7 @@
     display: none;
   }
   /* Compact layout (phones, portrait tablets); keep this query in step with COMPACT in App.svelte. */
-  @media (max-width: 899px) and (min-height: 501px) {
+  @media (max-width: 599px), (max-width: 899px) and (min-height: 501px) {
     .chips {
       display: flex;
     }

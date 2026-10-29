@@ -386,7 +386,7 @@
     font: 0.85rem/1.45 ui-monospace, "Space Mono", monospace;
   }
   /* Compact tray (phones, portrait tablets): one swipeable row, so the photo keeps the screen. Same query as COMPACT in App.svelte. */
-  @media (max-width: 899px) and (min-height: 501px) {
+  @media (max-width: 599px), (max-width: 899px) and (min-height: 501px) {
     .looks {
       display: flex;
       gap: 10px;

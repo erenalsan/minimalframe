@@ -460,7 +460,7 @@ fieldset {
 
 /* Phones: long choice lists scroll sideways in one line; the fade at the edge says there is more.
    Same query as COMPACT in App.svelte. */
-@media (max-width: 899px) and (min-height: 501px) {
+@media (max-width: 599px), (max-width: 899px) and (min-height: 501px) {
   .seg.wrap {
     flex-wrap: nowrap;
     max-width: 100%;

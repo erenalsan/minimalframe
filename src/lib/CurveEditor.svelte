@@ -109,7 +109,7 @@
      (the row's 38 + gap 16 + the tray's own padding 20, and 2 to spare for rounding), so the whole curve
      shows without scrolling.
      Same query as COMPACT in App.svelte. */
-  @media (max-width: 899px) and (min-height: 501px) {
+  @media (max-width: 599px), (max-width: 899px) and (min-height: 501px) {
     .curve {
       aspect-ratio: auto;
       height: calc(var(--tray-max, 200px) - 76px);

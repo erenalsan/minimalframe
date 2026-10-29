@@ -123,7 +123,9 @@
   let activeTool = $state({ editor: "looks", framing: "templates" }); // framing starts at the frames themselves
   // Compact layout (phones, portrait tablets): the photo fills the screen, the tool row sits at the bottom and a
   // tool opens in a small tray above it, closed with Done. Same query as the compact CSS block below.
-  const COMPACT = "(max-width: 899px) and (min-height: 501px)";
+  // Narrower than 600px is always a phone held upright, even when the keyboard leaves little height
+  // (a phone on its side is at least 640px wide)
+  const COMPACT = "(max-width: 599px), (max-width: 899px) and (min-height: 501px)";
   const compactQuery = matchMedia(COMPACT);
   let compact = $state(compactQuery.matches);
   compactQuery.addEventListener("change", (e) => (compact = e.matches));
@@ -180,6 +182,18 @@
     sizeTray(trayHeight(), 0, done);
   }
   let trayView = $state("tool"); // phones: the tray shows the tool's settings, or "photos"
+  // Phones, typing in the tray (a caption, the place): the keyboard takes half the screen, so the tool row
+  // steps aside and the tray gets shorter, keeping the photo in view above the text being typed.
+  let typing = $state(false);
+  const isTextField = (el) => el?.matches?.('.panel :is(input:not([type]), input[type="text"], input[type="search"], textarea)');
+  $effect(() => {
+    if (!compact) return (typing = false);
+    const on = (e) => (typing = isTextField(e.target));
+    const off = (e) => !isTextField(e.relatedTarget) && (typing = false);
+    document.addEventListener("focusin", on);
+    document.addEventListener("focusout", off);
+    return () => (document.removeEventListener("focusin", on), document.removeEventListener("focusout", off));
+  });
 
   // Phones: pull the tray down to close it, by its head, or by its content when that is scrolled to the top
   // (the same swipe that would scroll further up). Touch events, so we can stop the page from scrolling.
@@ -2645,6 +2659,7 @@
   class="app"
   class:empty={!started}
   class:moving
+  class:typing
 >
   <header class="bar" class:tight={barTight} bind:this={barEl}>
     <div class="bar-side">
@@ -3896,7 +3911,7 @@
 
   /* ── Compact: phones and portrait tablets (keep in step with COMPACT in the script) ──
      Same order as desktop, stacked: bar · photo · (photos) · settings tray · tool row. */
-  @media (max-width: 899px) and (min-height: 501px) {
+  @media (max-width: 599px), (max-width: 899px) and (min-height: 501px) {
     .app {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: auto minmax(0, 1fr) auto auto auto;
@@ -4014,6 +4029,12 @@
       position: relative;
       --tray-max: max(26dvh, 200px); /* the tray's body at most (see .body) */
     }
+    .app.typing .panel {
+      --tray-max: 36dvh; /* dvh: the height above the keyboard */
+    }
+    .app.typing .rail {
+      display: none;
+    }
     .panel::before {
       position: absolute;
       top: 6px;
@@ -4071,7 +4092,7 @@
     }
   }
   /* Landscape phones: desktop's left-to-right layout (a bottom tray would squash the photo), slimmer. */
-  @media (max-height: 500px) {
+  @media (max-height: 500px) and (min-width: 600px) {
     .app:not(.empty) {
       grid-template-columns: minmax(0, 1fr) 280px 72px;
     }
