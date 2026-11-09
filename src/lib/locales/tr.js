@@ -523,4 +523,7 @@ export default {
   "OK": "Tamam",
   "Send feedback": "Geri bildirim gönder",
   "Privacy": "Gizlilik",
+  "Settings": "Ayarlar",
+  "About": "Hakkında",
+  "Licenses": "Lisanslar",
 };

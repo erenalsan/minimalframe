@@ -96,7 +96,7 @@
   import LanguagePicker from "./components/LanguagePicker.svelte";
   import SavedPhotos from "./components/SavedPhotos.svelte";
   import { useColor } from "./lib/colorMemory.svelte.js";
-  import ThemePicker from "./components/ThemePicker.svelte";
+  import Settings from "./components/Settings.svelte";
   import { logoLib, addLogo, useLogo, deleteLogo } from "./lib/logoLibrary.svelte.js";
   import PhotosTray from "./components/PhotosTray.svelte";
   import SaveDialog from "./components/SaveDialog.svelte";
@@ -2431,6 +2431,7 @@
   const isApp = Capacitor.isNativePlatform();
   const Gallery = registerPlugin("Gallery");
   let savedOpen = $state(false); // the saved-photos screen (app only)
+  let settingsOpen = $state(false);
   // shortcut: Android 7–9 keep exports outside the album, so the screen is offered on Android 10+ only
   let savedSupported = $state(false);
   if (isApp) Gallery.list().then((r) => (savedSupported = r.supported), () => {});
@@ -2692,7 +2693,7 @@
         <button use:fitWidth aria-pressed={activeTab === "framing"} onclick={() => setMode("framing")}>{t("Frame")}</button>
       </div>
       <div class="bar-side end">
-        {#if !compact}<ThemePicker /><LanguagePicker />{/if}
+        {#if !compact}<button class="icon-btn" onclick={() => (settingsOpen = true)} aria-label={t("Settings")} title={t("Settings")}><Icon name="settings" /></button>{/if}
         <button class="icon-btn add-btn" onclick={() => fileInput?.click()} aria-label={t("Add photos")} title={t("Add photos")}><Icon name="add" /></button>
         <button class="icon-btn" onclick={undo} disabled={!canUndo || !activeItem} aria-label={t("Undo")} title={t("Undo (Ctrl+Z)")}><Icon name="undo" /></button>
         <button class="icon-btn" onclick={redo} disabled={!canRedo || !activeItem} aria-label={t("Redo")} title={t("Redo (Ctrl+Shift+Z)")}><Icon name="redo" /></button>
@@ -2708,7 +2709,7 @@
       </div>
     {:else}
       <!-- first visit: the language is the one setting people may need before anything else -->
-      <div class="bar-side end"><LanguagePicker /></div>
+      <div class="bar-side end"><LanguagePicker /><button class="icon-btn" onclick={() => (settingsOpen = true)} aria-label={t("Settings")} title={t("Settings")}><Icon name="settings" /></button></div>
     {/if}
   </header>
 
@@ -2955,6 +2956,7 @@
             onadd={() => fileInput?.click()}
             onmove={reorderPhoto}
             onsaved={savedSupported ? () => (closeTray(), (savedOpen = true)) : null}
+            onsettings={() => (closeTray(), (settingsOpen = true))}
           />
         {:else if activeTab === "editor" && !activeItem}
           <p class="tool-hint">{t("Add a photo to edit it.")}</p>
@@ -3100,6 +3102,7 @@
 </main>
 
 {#if savedSupported}<SavedPhotos bind:open={savedOpen} {Gallery} {closeOnBack} />{/if}
+<Settings bind:open={settingsOpen} {closeOnBack} />
 <DevNotice />
 
 <style>

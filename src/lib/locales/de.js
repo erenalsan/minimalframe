@@ -524,4 +524,7 @@ export default {
   "OK": "OK",
   "Send feedback": "Feedback senden",
   "Privacy": "Datenschutz",
+  "Settings": "Einstellungen",
+  "About": "Über",
+  "Licenses": "Lizenzen",
 };

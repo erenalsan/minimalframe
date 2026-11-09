@@ -4,11 +4,9 @@
   import Icon from "./Icon.svelte";
   import { t } from "../lib/i18n.svelte.js";
   import { reorder } from "../lib/reorder.js";
-  import LanguagePicker from "./LanguagePicker.svelte";
-  import ThemePicker from "./ThemePicker.svelte";
   import PostOptions from "./PostOptions.svelte";
 
-  let { filesList = $bindable(), post = $bindable(), activeIndex, coverOn, coverShown, autoTitle, onpick, onpickcover, onremove, onadd, onmove, onsaved = null } = $props();
+  let { filesList = $bindable(), post = $bindable(), activeIndex, coverOn, coverShown, autoTitle, onpick, onpickcover, onremove, onadd, onmove, onsaved = null, onsettings } = $props();
   const ticked = $derived(filesList.filter((f) => f.selected).length);
   // each ticked photo's place in the post
   const place = $derived(new Map(filesList.filter((f) => f.selected).map((f, i) => [f, i + 1])));
@@ -45,13 +43,8 @@
   )}
 </p>
 {#if onsaved}<button class="btn ghost saved" onclick={onsaved}><Icon name="gallery" />{t("Saved photos")}</button>{/if}
-<!-- phones: the top bar is full, so the language lives here -->
-<div class="lang">
-  <span class="label">{t("Language")}</span>
-  <LanguagePicker inline />
-  <span class="label">{t("Appearance")}</span>
-  <ThemePicker inline />
-</div>
+<!-- phones: the top bar is full, so settings live here -->
+<button class="btn ghost saved" onclick={onsettings}><Icon name="settings" />{t("Settings")}</button>
 
 <style>
   .photos + :global(.post) {
@@ -68,11 +61,6 @@
   .saved :global(svg) {
     width: 18px;
     height: 18px;
-  }
-  .lang {
-    display: grid;
-    gap: 8px;
-    margin-top: 6px;
   }
   .photos {
     display: grid;

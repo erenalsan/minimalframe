@@ -84,6 +84,7 @@ export const ICONS = {
   gallery: "M4 5h16v14H4zM4 15l4.5-4.5 4 4 2.5-2.5L20 17M15.5 9.5v.01",
   "chev-left": "M14.5 6l-6 6 6 6",
   "chev-right": "M9.5 6l6 6-6 6",
+  settings: "M4 7h9M17 7h3M15 5v4M4 17h3M11 17h9M9 15v4",
   trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
 };
 
