@@ -100,6 +100,7 @@
   import { logoLib, addLogo, useLogo, deleteLogo } from "./lib/logoLibrary.svelte.js";
   import PhotosTray from "./components/PhotosTray.svelte";
   import SaveDialog from "./components/SaveDialog.svelte";
+  import DevNotice from "./components/DevNotice.svelte";
   import Histogram from "./lib/Histogram.svelte";
 
   // Tool panels
@@ -3099,6 +3100,7 @@
 </main>
 
 {#if savedSupported}<SavedPhotos bind:open={savedOpen} {Gallery} {closeOnBack} />{/if}
+<DevNotice />
 
 <style>
   /* ── Shell ───────────────────────────────────────────────────────────────

@@ -518,4 +518,10 @@ export default {
   "Use {c}": "{c} verwenden",
   "Remove saved color {c}": "Gespeicherte Farbe {c} entfernen",
   "Saved": "Gespeichert",
+  // ── About and feedback
+  "Still in development": "Noch in Entwicklung",
+  "MinimalFrame {v} is an early version, so some things may not work yet. If something breaks or you have an idea, write to me:": "MinimalFrame {v} ist eine frühe Version, manches funktioniert vielleicht noch nicht. Wenn etwas nicht klappt oder du eine Idee hast, schreib mir:",
+  "OK": "OK",
+  "Send feedback": "Feedback senden",
+  "Privacy": "Datenschutz",
 };

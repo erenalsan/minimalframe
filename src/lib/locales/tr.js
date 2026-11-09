@@ -517,4 +517,10 @@ export default {
   "Use {c}": "{c} kullan",
   "Remove saved color {c}": "Kaydedilen {c} rengini kaldır",
   "Saved": "Kaydedildi",
+  // ── About and feedback
+  "Still in development": "Hâlâ geliştiriliyor",
+  "MinimalFrame {v} is an early version, so some things may not work yet. If something breaks or you have an idea, write to me:": "MinimalFrame {v} erken bir sürüm, bu yüzden bazı şeyler henüz çalışmayabilir. Bir sorun çıkarsa ya da bir fikrin varsa bana yaz:",
+  "OK": "Tamam",
+  "Send feedback": "Geri bildirim gönder",
+  "Privacy": "Gizlilik",
 };

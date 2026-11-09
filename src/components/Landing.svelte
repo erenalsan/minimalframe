@@ -9,6 +9,7 @@
   import Icon from "./Icon.svelte";
   import { t } from "../lib/i18n.svelte.js";
   import LanguagePicker from "./LanguagePicker.svelte";
+  import { VERSION, PRIVACY_URL, feedbackHref } from "../lib/contact.js";
   // langInWell: phones, where the top bar has no room for the language button.
   let { bare = false, langInWell = false, isLoading, loadingStatus, isDragging, onchoose, onsample, onpick, onsaved } = $props();
 
@@ -78,7 +79,12 @@
     {#if onsaved}<button class="link saved-link" onclick={onsaved}><Icon name="gallery" />{t("Your saved photos")}</button>{/if}
     <p class="mono">JPEG · PNG · HEIC · RAW</p>
     {#if bare && langInWell}<LanguagePicker inline />{/if}
+    {@render about()}
   </div>
+{/snippet}
+
+{#snippet about()}
+  <p class="mono about"><a href={feedbackHref()}>{t("Send feedback")}</a> · <a href={PRIVACY_URL} target="_blank" rel="noopener">{t("Privacy")}</a> · v{VERSION}</p>
 {/snippet}
 
 {#if bare}
@@ -160,6 +166,7 @@
     <span>{t("Film looks · LUTs · recipes")}</span>
     <span>{t("Batch export")}</span>
     <span>{t("Location removed on export")}</span>
+    {@render about()}
   </footer>
 </div>
 {/if}
@@ -621,6 +628,12 @@
     text-underline-offset: 3px;
     cursor: pointer;
   }
+  .about a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .about a:hover { color: var(--text); }
   .ink:disabled, .link:disabled, .print:disabled { opacity: 0.6; cursor: default; }
 
   .rule {

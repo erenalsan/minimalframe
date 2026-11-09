@@ -1,9 +1,12 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { readFileSync } from 'node:fs'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // the version shown in the app and put in feedback emails
+  define: { __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync('package.json', 'utf8')).version) },
   plugins: [
     svelte(),
     // Installable, fully offline app: every asset (fonts, RAW decoder) is precached on first visit.
