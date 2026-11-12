@@ -1825,7 +1825,7 @@
     if (display.focalLength && override.focalLength?.trim())
       settings.push(override.focalLength.trim());
     if (display.aperture && override.aperture?.trim())
-      settings.push(override.aperture.trim());
+      settings.push(captionFont().plainF ? override.aperture.trim().replace("ƒ", "f") : override.aperture.trim());
     if (display.shutterSpeed && override.shutterSpeed?.trim())
       settings.push(override.shutterSpeed.trim());
     if (display.iso && override.iso?.trim()) settings.push(override.iso.trim());
@@ -1846,9 +1846,8 @@
   // ─── Frame layout (one function for preview and export, so both always match) ─
   // Every size is proportional to the photo, so the same settings give the same result at any resolution.
   const measureCtx = document.createElement("canvas").getContext("2d");
-  const captionFamily = () =>
-    (allFonts().find((f) => f.id === frame.selectedFontId) || SYSTEM_FONTS[0])
-      .css;
+  const captionFont = () => allFonts().find((f) => f.id === frame.selectedFontId) || SYSTEM_FONTS[0];
+  const captionFamily = () => captionFont().css;
 
   // ─── Film borders (film.js) ────────────────────────────────────────────────
   // The film object (strip, print or slide with the photo in it) takes the photo's place in the layout.

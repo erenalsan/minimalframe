@@ -143,7 +143,7 @@ export const RATIOS = [
 export const SYSTEM_FONTS = [
   { id: "archivo", label: "Archivo", css: '"Archivo Variable", system-ui, sans-serif' },
   { id: "montserrat", label: "Montserrat", css: '"Montserrat", sans-serif' },
-  { id: "bebas", label: "Bebas Neue", css: '"Bebas Neue", sans-serif' },
+  { id: "bebas", label: "Bebas Neue", css: '"Bebas Neue", sans-serif', plainF: true }, // its ƒ is a struck F that reads as ₿
   { id: "dmserif", label: "DM Serif", css: '"DM Serif Display", serif' },
   { id: "playfair", label: "Playfair", css: '"Playfair Display", serif' },
   { id: "cormorant", label: "Cormorant", css: '"Cormorant Garamond", serif' },
