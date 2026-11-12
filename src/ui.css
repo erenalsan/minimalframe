@@ -478,6 +478,32 @@ fieldset {
   .stack {
     gap: var(--sp-3);
   }
+  /* Where the browser can follow the scroll, a side fades only while there's more that way: at the end (or
+     when it all fits) the last item shows whole, like the first. */
+  @supports (animation-timeline: scroll()) {
+    .seg.wrap,
+    .fade-x {
+      mask-image: linear-gradient(to right, transparent, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent);
+      animation: edge-fade linear both;
+      animation-timeline: scroll(self inline);
+    }
+  }
+}
+/* nothing to scroll: the timeline is inactive and both stay 0, so no fade */
+@property --fade-l {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-r {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes edge-fade {
+  0% { --fade-l: 0px; --fade-r: 28px; }
+  5%, 95% { --fade-l: 28px; --fade-r: 28px; }
+  100% { --fade-l: 28px; --fade-r: 0px; }
 }
 
 @media (max-width: 899px) {
