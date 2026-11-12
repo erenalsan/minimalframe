@@ -2978,6 +2978,7 @@
               onsavelook={(name) => openSave("look", name)}
               ondeletelook={deleteLook}
               onerror={(msg) => (loadError = msg)}
+              {closeOnBack}
             />
           {:else if tool === "crop"}
             <CropTool

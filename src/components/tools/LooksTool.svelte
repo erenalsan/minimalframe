@@ -19,14 +19,24 @@
     onsavelook, // (suggested name) → App opens the save dialog
     ondeletelook,
     onerror,
+    closeOnBack,
   } = $props();
 
   let recipeDialog = $state.raw(null);
+  let recipeOpen = $state(false);
+  function showRecipe() {
+    recipeDialog.showModal();
+    recipeOpen = true;
+  }
+  // back closes the dialog first: closing the tray under it left an invisible modal that blocked every tap
+  $effect(() => {
+    if (recipeOpen) return closeOnBack(() => recipeDialog?.close());
+  });
   // shared text (openRecipe) opens the dialog as soon as the Looks tool is on screen
   $effect(() => {
     if (ui.open && recipeDialog) {
       ui.open = false;
-      recipeDialog.showModal();
+      showRecipe();
     }
   });
   function useRecipeText(text) {
@@ -206,7 +216,7 @@
   {/each}
 </div>
 <div class="row-btns">
-  <button class="btn ghost" onclick={() => recipeDialog.showModal()}>{t("Fujifilm recipe")}</button>
+  <button class="btn ghost" onclick={showRecipe}>{t("Fujifilm recipe")}</button>
   <button class="btn ghost" onclick={() => onsavelook("")}>{t("Save as my look")}</button>
 </div>
 {#if selectedCount > 1}
@@ -258,7 +268,7 @@
 {/if}
 
 <!-- Fujifilm recipe: its own small dialog, opened from the button above -->
-<dialog class="sheet glass" bind:this={recipeDialog} aria-labelledby="recipe-title" onclick={(e) => e.target === recipeDialog && recipeDialog.close()}>
+<dialog class="sheet glass" bind:this={recipeDialog} aria-labelledby="recipe-title" onclose={() => (recipeOpen = false)} onclick={(e) => e.target === recipeDialog && recipeDialog.close()}>
   <div class="sheet-in recipe">
     <div class="sheet-head">
       <h2 id="recipe-title">{t("Fujifilm recipe")}</h2>
