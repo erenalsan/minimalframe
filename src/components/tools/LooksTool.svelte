@@ -403,7 +403,7 @@
       overflow-x: auto;
       scrollbar-width: none;
       margin: 0 calc(-1 * var(--sp-3));
-      padding: 2px var(--sp-3) 4px;
+      padding: 4px var(--sp-3); /* room for the 4px selected ring, which the scrolling row would clip */
     }
     .looks > :global(*) {
       flex: 0 0 74px;
